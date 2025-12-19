@@ -1,6 +1,6 @@
 # PeerHost
 
-PeerHost - Hệ thống điều phối và lưu trữ world Minecraft theo kiến trúc Hybrid P2P.
+PeerHost - Hệ thống Minecraft Hybrid P2P, nơi người chơi tự host thế giới, trong khi server chỉ điều phối chọn host và đồng bộ dữ liệu world. Nhanh, giảm chi phí, ổn định và dễ sử dụng.
 
 ## Mô tả
 

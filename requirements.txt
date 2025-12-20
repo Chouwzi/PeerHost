@@ -3,3 +3,4 @@ sqlmodel
 uvicorn
 python-multipart
 pydantic
+python_nbt

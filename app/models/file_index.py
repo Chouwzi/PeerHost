@@ -7,6 +7,6 @@ class FileIndex(SQLModel, table=True):
   file_name: str
   hash: str
   size: int
-  update_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  update_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
   update_by_host: str
   host_ip: Optional[str] = None

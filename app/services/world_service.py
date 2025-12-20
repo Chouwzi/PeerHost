@@ -1,19 +1,9 @@
-import sys
-import os
-import shutil
-
-# Get the absolute path to the project root
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-sys.path.insert(0, project_root)
-
-# Ensure the current directory is also in the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, current_dir)
-sys.path.insert(0, os.path.dirname(current_dir))
-
 from app.core.config import STORAGE_PATH
+from app.utils import json_storage
 from pathlib import Path
 import python_nbt.nbt as nbt
+from datetime import datetime, timezone
+import shutil
 
 def get_world(world_id: str) -> dict | None:
   """Lấy thông tin cơ bản của thế giới
@@ -87,26 +77,41 @@ def delete_world(world_id: str) -> bool:
   return True
 
 def create_world(world_id: str) -> Path:
-  """Tạo cấu trúc thư mục của thế giới
-
-  Args:
-      world_id (str): ID thế giới
-
-  Returns:
-      Path: Đường dẫn thư mục
-  """
   worlds_path = STORAGE_PATH / "worlds"
-  worlds_path.mkdir(parents=True, exist_ok=True)
-
   world_root_path = worlds_path / world_id
-  world_root_path.mkdir(exist_ok=True)
 
-  world_path = world_root_path / "world"
-  meta_path = world_root_path / "meta"
-  snapshots_path = world_root_path / "snapshots"
+  # (1) Không cho tạo trùng
+  if world_root_path.exists():
+      raise FileExistsError(f"World '{world_id}' already exists")
 
-  world_path.mkdir(exist_ok=True)
-  meta_path.mkdir(exist_ok=True)
-  snapshots_path.mkdir(exist_ok=True)
+  # (2) Tạo thư mục
+  (world_root_path / "world").mkdir(parents=True)
+  (world_root_path / "meta").mkdir()
+  (world_root_path / "snapshots").mkdir()
 
-  return worlds_path
+  # (3) Metadata world
+  world_json = {
+      "id": world_id,
+      "created_at": datetime.now(timezone.utc).isoformat(),
+      "status": "inactive"
+  }
+
+  # (4) Metadata host
+  host_json = {
+    "host_id": None,
+    "token": None,
+    "expires_at": None,
+    "last_heartbeat": None
+  }
+
+  json_storage.write_json(
+      world_root_path / "meta" / "world.json",
+      world_json
+  )
+
+  json_storage.write_json(
+      world_root_path / "meta" / "host.json",
+      host_json
+  )
+
+  return world_root_path

@@ -33,7 +33,7 @@ def create_file_record(
     file_name=file_name,
     hash=hash,
     size=size,
-    update_at=datetime.now(timezone.utc),
+    update_at=datetime.now(timezone.utc).isoformat(),
     update_by_host=update_by_host,
     host_ip=host_ip,
   )

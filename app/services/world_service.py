@@ -97,11 +97,24 @@ def create_world(world_id: str) -> Path:
   }
 
   # (4) Metadata host
-  host_json = {
-    "host_id": None,
-    "token": None,
-    "expires_at": None,
-    "last_heartbeat": None
+  session_json = {
+    "world_id": world_id,
+    "is_locked": True,
+    "host": {
+      "host_id": None,
+      "token": None,
+      "public_url": None,
+      "ip_address": None
+    },
+    "timestamps": {
+      "started_at": None,
+      "last_heartbeat": None,
+      "expires_at": None
+    },
+    "config": {
+      "heartbeat_interval": 5, # Second
+      "lock_timeout": 15 # Second
+    }
   }
 
   json_storage.write_json(
@@ -110,8 +123,8 @@ def create_world(world_id: str) -> Path:
   )
 
   json_storage.write_json(
-      world_root_path / "meta" / "host.json",
-      host_json
+      world_root_path / "meta" / "session.json",
+      session_json
   )
 
   return world_root_path

@@ -6,3 +6,8 @@ __pycache__/
 app/storage/*
 .pytest_cache/
 METADATA.md
+.agent/
+.antigravity/
+*cache
+*log
+*token

@@ -4,14 +4,22 @@ load_dotenv()
 import os
 from pathlib import Path
 
-WORLD_ID = os.getenv("WORLD_ID")
-STORAGE_PATH = Path(os.getenv("STORAGE_PATH"))
+import json
 
-DB_PATH = STORAGE_PATH / "worlds" / WORLD_ID / "meta" / "file_index.db"
+STORAGE_PATH = Path(os.getenv("STORAGE_PATH", "./storage"))
+
+DB_PATH = STORAGE_PATH / "meta" / "file_index.db"
 DATABASE_URL = f"sqlite:///.{str(DB_PATH)}"
 
-HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL"))
-LOCK_TIMEOUT = int(os.getenv("LOCK_TIMEOUT"))
+# Load non-secret settings from JSON
+SETTINGS_PATH = Path("app/settings.json")
+_settings = {}
+if SETTINGS_PATH.exists():
+    with open(SETTINGS_PATH, "r") as f:
+        _settings = json.load(f)
+
+HEARTBEAT_INTERVAL = _settings.get("heartbeat_interval", 10)
+LOCK_TIMEOUT = _settings.get("lock_timeout", 60)
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")

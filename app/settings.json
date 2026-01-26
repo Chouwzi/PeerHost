@@ -1,4 +1,4 @@
 {
-  "heartbeat_interval": 5,
-  "lock_timeout": 15
+  "heartbeat_interval": 3,
+  "lock_timeout": 10
 }

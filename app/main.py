@@ -12,7 +12,7 @@ async def monitor_sessions():
     """Tác vụ nền kiểm tra active session"""
     while True:
         try:
-           host_service.scan_all_sessions()
+           await host_service.scan_all_sessions()
         except Exception as e:
            print(f"Error checking sessions: {e}")
         await asyncio.sleep(HEARTBEAT_INTERVAL)

@@ -3,10 +3,13 @@ from sqlmodel import SQLModel
 from app.db.database import engine
 from app.routers.worlds import router as world_router
 from app.routers.hosts import router as host_router
+from app.routers.files import router as files_router
+from app.routers.manifest import router as manifest_router
 
 import asyncio
 from app.core.config import HEARTBEAT_INTERVAL
 from app.services import host_service
+
 
 async def monitor_sessions():
     """Tác vụ nền kiểm tra active session"""
@@ -30,3 +33,5 @@ def lifespan():
   SQLModel.metadata.create_all(engine)
   
 app.include_router(host_router, prefix="/world", tags=["host"])
+app.include_router(files_router, tags=["files"])
+app.include_router(manifest_router, tags=["manifest"])

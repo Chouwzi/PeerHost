@@ -1,4 +1,5 @@
 {
-  "heartbeat_interval": 3,
-  "lock_timeout": 10
+  "heartbeat_interval": 2,
+  "lock_timeout": 6,
+  "start_command": "java -Xmx4G -Xms4G -jar server.jar nogui"
 }

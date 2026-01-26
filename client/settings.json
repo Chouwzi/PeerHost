@@ -1,5 +1,6 @@
 {
   "server_url": "http://127.0.0.1:8000",
   "host_id": "demo1",
-  "debug": true
+  "watch_dir": "./world",
+  "debug": false
 }

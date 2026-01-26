@@ -36,6 +36,8 @@ class CustomFormatter(logging.Formatter):
         formatter = logging.Formatter(self.FORMAT, datefmt="%H:%M:%S")
         return formatter.format(record)
 
+_loggers = []
+
 def setup_logger(name: str = "Client"):
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)  # Default level
@@ -45,5 +47,15 @@ def setup_logger(name: str = "Client"):
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(CustomFormatter())
         logger.addHandler(console_handler)
+    
+    if logger not in _loggers:
+        _loggers.append(logger)
 
     return logger
+
+def set_debug_mode(enabled: bool):
+    """Bật/Tắt chế độ Debug cho TẤT CẢ logger đã đăng ký."""
+    level = logging.DEBUG if enabled else logging.INFO
+    for logger in _loggers:
+        logger.setLevel(level)
+

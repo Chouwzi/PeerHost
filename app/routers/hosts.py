@@ -31,12 +31,15 @@ async def heartbeat(token: dict = Depends(get_session_token)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized or Session lost")
     
     try:
-        await host_service.heartbeat_session()
+        heartbeat = await host_service.heartbeat_session()
     except FileNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    
-    return {"status": "ok"}
 
+    return {
+      "host_id": token.get("host_id"),
+      "timestamps": heartbeat.get("timestamps")
+    }
+  
 @router.get("/session", status_code=status.HTTP_200_OK, response_model=SessionResponse)
 async def get_session():
   """Lấy thông tin session của thế giới"""

@@ -6,7 +6,7 @@ import hashlib
 from pathlib import Path
 from typing import List, Dict
 import anyio
-from app.core.config import STORAGE_PATH
+from app.core.config import STORAGE_PATH, WORLD_DATA_PATH
 
 
 async def calculate_file_hash(file_path: anyio.Path) -> str:
@@ -30,7 +30,7 @@ async def scan_world_files() -> List[Dict]:
     Returns:
         List of file info dicts: [{path, hash, size}, ...]
     """
-    root_path = anyio.Path(STORAGE_PATH)
+    root_path = anyio.Path(WORLD_DATA_PATH)
     
     if not await root_path.exists():
         return []

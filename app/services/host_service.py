@@ -136,7 +136,7 @@ async def heartbeat_session() -> dict:
 
 async def delete_session() -> bool:
   """Xóa session của thế giới"""
-  world_path = anyio.Path(STORAGE_PATH / "world")
+  world_path = anyio.Path(STORAGE_PATH / "world_data")
   if not await world_path.exists():
     return False
   
@@ -268,18 +268,7 @@ async def scan_all_sessions():
     if not await storage_path.exists():
         return
     
-    world_path = storage_path / "world" # Wait, logic in scan_all_sessions old code check STORAGE_PATH then STORAGE_PATH/world.
-    # Ah, STORAGE_PATH points to world_storage/world1 usually?
-    # In old code: world_path = STORAGE_PATH / "world". 
-    # But create_session uses STORAGE_PATH / "meta" / "session.json".
-    # This seems inconsistent or STORAGE_PATH is the root of world.
-    # checking create_session: STORAGE_PATH / "meta" / "session.json"
-    # checking scan_all_sessions: STORAGE_PATH / "world" -> if not exists return.
-    # But logic is just calling get_session().
-    
-    # I will just keep logic to call get_session().
-    # But wait, create_session raises FileNotFoundError if STORAGE_PATH checks. 
-    
+    world_path = storage_path / "world_data" # Wait, logic in scan_all_sessions old code check STORAGE_PATH then STORAGE_PATH/world.
     try:
         # get_session tự động kiểm tra và reset nếu hết hạn
         await get_session()

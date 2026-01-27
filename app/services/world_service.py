@@ -19,7 +19,7 @@ def get_world(world_id: str) -> dict | None:
   if not world_path.exists():
     return None
   
-  level_file = world_path / "world/level.dat"
+  level_file = world_path / "world_data/level.dat"
   if not level_file.exists():
     return None
   
@@ -85,7 +85,7 @@ def create_world(world_id: str) -> Path:
       raise FileExistsError(f"World '{world_id}' already exists")
 
   # (2) Tạo thư mục
-  (world_root_path / "world").mkdir(parents=True)
+  (world_root_path / "world_data").mkdir(parents=True)
   (world_root_path / "meta").mkdir()
   (world_root_path / "snapshots").mkdir()
 

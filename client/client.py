@@ -88,7 +88,7 @@ class Client:
           
       # 3. Wait for pending uploads from DiffManager to complete
       if self.sync_service:
-          await self.sync_service.wait_for_pending_uploads(timeout=5.0)
+          await self.sync_service.wait_for_pending_uploads(timeout=3.0)
       
       # 4. Final Sync - Upload any remaining saved files
       if self.sync_service:

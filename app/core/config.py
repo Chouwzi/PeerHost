@@ -7,6 +7,7 @@ from pathlib import Path
 import json
 
 STORAGE_PATH = Path(os.getenv("STORAGE_PATH", str(Path(__file__).parent.parent / "storage")))
+WORLD_DATA_PATH = STORAGE_PATH / "world_data"
 
 DB_PATH = STORAGE_PATH / "meta" / "file_index.db"
 DATABASE_URL = f"sqlite:///.{str(DB_PATH)}"

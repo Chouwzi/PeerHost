@@ -1,0 +1,13 @@
+{
+  "is_locked": false,
+  "host": {
+    "host_id": null,
+    "ip_address": null,
+    "token": null
+  },
+  "timestamps": {
+    "started_at": null,
+    "last_heartbeat": null,
+    "expires_at": null
+  }
+}

@@ -1,7 +1,7 @@
 import hashlib
 from pathlib import Path
 import anyio
-from app.core.config import STORAGE_PATH
+from app.core.config import STORAGE_PATH, WORLD_DATA_PATH
 from app.services import host_service
 
 # Danh sách file bị cấm ghi từ Client (Server-side Enforcement)
@@ -79,7 +79,7 @@ async def save_file(host_id: str, relative_path: str, content_stream: AsyncGener
          raise ValueError("Invalid file path.")
 
     # 3. Storage Path Resolution (Chuẩn bị đường dẫn)
-    root_path = anyio.Path(STORAGE_PATH)
+    root_path = anyio.Path(WORLD_DATA_PATH)
     if not await root_path.exists():
         await root_path.mkdir(parents=True, exist_ok=True)
         
@@ -141,7 +141,7 @@ async def get_file(relative_path: str) -> bytes | None:
     if "meta" in Path(relative_path).parts:
          return None
          
-    root_path = anyio.Path(STORAGE_PATH)
+    root_path = anyio.Path(WORLD_DATA_PATH)
     target_path = root_path / relative_path
     
     if not await target_path.exists():

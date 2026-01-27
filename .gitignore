@@ -3,7 +3,7 @@ __pycache__/
 .venv/
 .env
 .vscode/
-app/storage/*
+app/storage/world_data/*
 .pytest_cache/
 METADATA.md
 .agent/

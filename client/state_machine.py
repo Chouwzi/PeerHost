@@ -66,7 +66,7 @@ class StateMachine:
         is_locked = session.get("is_locked")
         
         if is_locked and current_host_id != self.context._settings.host_id:
-            logger.info("[Discovery] Session đang được Host bởi: {current_host_id}. Chuyển sang chế độ Khách (Participant).")
+            logger.info(f"[Discovery] Session đang được Host bởi: {current_host_id}. Chuyển sang chế độ Khách (Participant).")
             return ClientState.PARTICIPANT
             
         if is_locked and current_host_id == self.context._settings.host_id:
@@ -84,7 +84,7 @@ class StateMachine:
         await self.context.pre_sync_manager.sync_from_server()
         
         # 2. Kiểm tra lại trạng thái Session
-        await asyncio.sleep(5) 
+        await asyncio.sleep(2) 
         session = await asyncio.to_thread(self.context.session_manager.get_session)
         
         if not session or not session.get("is_locked"):

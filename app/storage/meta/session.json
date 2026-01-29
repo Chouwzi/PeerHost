@@ -1,0 +1,13 @@
+{
+  "is_locked": true,
+  "host": {
+    "host_id": "ChuongPro",
+    "ip_address": "113.161.54.78",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJob3N0X2lkIjoiQ2h1b25nUHJvIiwiaXBfYWRkcmVzcyI6IjExMy4xNjEuNTQuNzgiLCJleHBpcmVzX2F0IjoiMjAyNi0wMS0yOVQwNjo0OToyMC43NzA1MjUrMDA6MDAifQ.kIi_5bLaUJeLKVZ6gSwQ6Wj6GIvqOIyyPmI61HhAlLE"
+  },
+  "timestamps": {
+    "started_at": "2026-01-29T06:49:13.770525+00:00",
+    "last_heartbeat": "2026-01-29T06:55:45.720197+00:00",
+    "expires_at": "2026-01-29T06:55:52.720197+00:00"
+  }
+}

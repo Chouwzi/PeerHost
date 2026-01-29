@@ -2,5 +2,7 @@ fastapi
 sqlmodel
 uvicorn
 python-multipart
-pydantic
+python-jose[cryptography]
 python_nbt
+anyio
+pydantic

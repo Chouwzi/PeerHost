@@ -1,5 +1,30 @@
+# Python
 __pycache__/
 *.pyc
 .venv/
-.env
-app/storage/*
+.pytest_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+
+# Agent/AI
+.agent/
+.antigravity/
+
+# Server Storage (keep structure, ignore content)
+app/storage/world_data/*
+app/storage/server_tunnel/*
+app/storage/meta/*
+
+# Build artifacts
+*.exe
+dist/
+build/
+
+# Tests
+tests/
+
+# Misc
+*cache
+*.log

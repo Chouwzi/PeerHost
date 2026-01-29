@@ -7,7 +7,7 @@ router = APIRouter()
 def create_world(payload: WorldCreate):
   world_id = payload.id
   world = world_service.get_world(world_id)
-  if world != None:
+  if world is not None:
     raise HTTPException(status_code=409, detail="World already exists")
   world_path = world_service.create_world(world_id)
   return {"path": world_path}

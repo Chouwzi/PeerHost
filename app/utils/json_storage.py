@@ -1,18 +1,27 @@
 from pathlib import Path
 import json
+import anyio
 import os
 
-def write_json(path: Path, data: dict) -> None:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  tmp = path.with_suffix(".tmp")
+import uuid
 
-  with tmp.open("w", encoding="utf-8") as f:
-      json.dump(data, f, ensure_ascii=False, indent=2)
+async def write_json(path: Path, data: dict) -> None:
+  path_obj = anyio.Path(path)
+  await path_obj.parent.mkdir(parents=True, exist_ok=True)
+  
+  # Use unique temp file to avoid race conditions (FileNotFoundError during high concurrency)
+  tmp = path_obj.parent / f"{path_obj.name}.{uuid.uuid4()}.tmp"
+  
+  async with await anyio.open_file(tmp, "w", encoding="utf-8") as f:
+      await f.write(json.dumps(data, indent=2, ensure_ascii=False))
+      
+  # Fix for Windows: os.replace is atomic and allows overwrite
+  await anyio.to_thread.run_sync(os.replace, str(tmp), str(path_obj))
 
-  os.replace(tmp, path)
-
-def read_json(path: Path) -> dict:
-  if not path.exists():
+async def read_json(path: Path) -> dict:
+  path = anyio.Path(path)
+  if not await path.exists():
     return {}
-  with path.open("r", encoding="utf-8") as f:
-    return json.load(f)
+  async with await anyio.open_file(path, "r", encoding="utf-8") as f:
+    content = await f.read()
+    return json.loads(content)

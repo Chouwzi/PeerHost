@@ -1,0 +1,6 @@
+pydantic
+rich
+pyfiglet
+aiohttp
+watchfiles
+psutil

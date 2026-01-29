@@ -1,6 +1,6 @@
 {
-  "server_url": "http://127.0.0.1:8000",
-  "host_id": "demo1",
+  "server_url": "https://peerhost.chouwzi.io.vn",
+  "host_id": "",
   "watch_dir": "./world",
   "debug": false
 }

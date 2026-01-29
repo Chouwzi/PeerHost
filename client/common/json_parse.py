@@ -14,7 +14,7 @@ def write_file(path: str, data: dict, overwrite: bool = True) -> bool:
       return False
     
     with open(path, 'w') as f:
-      f.write(data)
+      json.dump(data, f, indent=2)
     return True
     
   except:

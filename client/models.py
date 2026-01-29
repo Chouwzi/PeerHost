@@ -10,3 +10,10 @@ class SessionInfo(pydantic.BaseModel):
   token: str
   heartbeat_interval: int
   lock_timeout: int
+
+class TunnelConfig(pydantic.BaseModel):
+  """Tunnel configuration fetched from server"""
+  tunnel_name: str = "PeerHost"
+  game_hostname: str = ""
+  game_local_port: int = 2812
+

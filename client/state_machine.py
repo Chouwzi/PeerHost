@@ -1,7 +1,9 @@
 from enum import Enum, auto
 import asyncio
 from typing import Optional
-from utils.logger import setup_logger
+from common.logger import setup_logger
+from services.sync_service import fetch_server_config
+from models import TunnelConfig
 
 logger = setup_logger("StateMachine")
 
@@ -38,7 +40,7 @@ class StateMachine:
                     # Execute handler and get next state
                     next_state = await handler()
                     if next_state != self.current_state:
-                        logger.debug(f"[StateTransition] {self.current_state.name} -> {next_state.name}")
+                        logger.debug(f"[StateTransition] State change: {self.current_state.name} -> {next_state.name}")
                         self.current_state = next_state
                 except Exception as e:
                     logger.error(f"[StateTransition] Error in state {self.current_state.name}: {e}")
@@ -51,33 +53,85 @@ class StateMachine:
     
     async def _handle_init(self) -> ClientState:
         # Khởi tạo, kiểm tra môi trường
+        
+        # 0. Fetch tunnel config from server (once)
+        if self.context._tunnel_config is None:
+            logger.info("[Init] Đang lấy cấu hình tunnel từ server...")
+            config = await fetch_server_config(self.context._settings.server_url)
+            if config:
+                self.context._tunnel_config = TunnelConfig(
+                    tunnel_name=config.get("tunnel_name", "PeerHost"),
+                    game_hostname=config.get("game_hostname", ""),
+                    game_local_port=config.get("game_local_port", 2812)
+                )
+                self.context.cloudflare_service.update_tunnel_config(self.context._tunnel_config)
+                logger.info(f"[Init] Tunnel config: {self.context._tunnel_config.game_hostname}:{self.context._tunnel_config.game_local_port}")
+            else:
+                logger.warning("[Init] Không lấy được config từ server, dùng giá trị mặc định.")
+                self.context._tunnel_config = TunnelConfig()
+                self.context.cloudflare_service.update_tunnel_config(self.context._tunnel_config)
+        
+        # 1. Check Cloudflared (Priority Sync)
+        # Nếu chưa có file executable, tải ngay thư mục đó để User vào game được sớm nhất
+        cloudflared_path = self.context.cloudflare_service._cloudflared_path
+        if not cloudflared_path.exists():
+            logger.info("[Init] Chưa tìm thấy Cloudflared. Đang tải ưu tiên...")
+            # Sync priority folder "cloudflared-tunnel"
+            # Note: We need relative path pattern from watch_dir. 
+            # cloudflared-tunnel is in watch_dir?
+            # Based on cloudflare_service.py: self._cloudflared_path = self._watch_dir / "cloudflared-tunnel" / "cloudflared.exe"
+            await self.context.pre_sync_manager.sync_priority(["cloudflared-tunnel/*"])
+            
+        # 2. Bật mặc định chế độ Participant (Access) để sẵn sàng vào game
+        await self.context.cloudflare_service.start_participant_mode()
         return ClientState.DISCOVERY
 
     async def _handle_discovery(self) -> ClientState:
-        # Kiểm tra trạng thái Session từ Server
+        # 1. Kiểm tra kết nối mạng (Lightweight Ping)
+        is_connected = await asyncio.to_thread(self.context.session_manager.check_connection)
+        
+        if not is_connected:
+            logger.warning("[Discovery] Mất kết nối Server. Đang chờ kết nối lại...")
+            while True:
+                await asyncio.sleep(2)
+                is_connected = await asyncio.to_thread(self.context.session_manager.check_connection)
+                if is_connected:
+                    break
+            return ClientState.DISCOVERY 
+
+        # 2. Kiểm tra trạng thái Session từ Server
         session = await asyncio.to_thread(self.context.session_manager.get_session)
         
-        # Lỗi kết nối hoặc chưa có Session
+        # Nếu đã có mạng (ping OK) mà get_session trả về None -> Server lỗi 500/404 hoặc JSON die.
+        # Vẫn thử PreHostSync để xem có cứu vãn được không (nếu lỗi lạ), hoặc loop tiếp.
+        # Tuy nhiên, nếu server sống mà trả 200 OK thì session sẽ có data.
         if session is None:
-             logger.debug("[Discovery] Không thể kết nối Server hoặc chưa có Session. Chuyển sang chế độ Đồng bộ.")
+             logger.debug("[Discovery] Server phản hồi nhưng không lấy được Session. Chuyển sang PreSync.")
              return ClientState.PRE_HOST_SYNC 
              
+        # Start Participant Tunnel (Access Mode) if locked by someone else
         current_host_id = session.get("host_id")
         is_locked = session.get("is_locked")
         
         if is_locked and current_host_id != self.context._settings.host_id:
-            logger.info(f"[Discovery] Session đang được Host bởi: {current_host_id}. Chuyển sang chế độ Khách (Participant).")
+            logger.info(f"[Discovery] Session đang được Host bởi: [bold yellow]{current_host_id}[/bold yellow]. Chuyển sang chế độ Khách (Participant).")
+            # CloudflareService.start_participant_mode() is idempotent and doesn't stop host-mode
+            await self.context.cloudflare_service.start_participant_mode()
             return ClientState.PARTICIPANT
             
         if is_locked and current_host_id == self.context._settings.host_id:
-            logger.info("[Discovery] Phát hiện Session cũ vẫn còn hiệu lực. Đang khôi phục quyền Host...")
-            return ClientState.HOSTING
+            logger.info("[Discovery] Phát hiện Session cũ vẫn còn hiệu lực. Đang xác thực lại dữ liệu...")
+            # CRITICAL FIX: DO NOT jump to HOSTING directly. 
+            # We MUST verify files (PreHostSync) because the previous session might have crashed due to missing files.
+            return ClientState.PRE_HOST_SYNC
             
         # Session trống -> Có thể Host
         return ClientState.PRE_HOST_SYNC
 
     async def _handle_participant(self) -> ClientState:
         # Chế độ Khách: Liên tục đồng bộ từ Server (Witness Mode)
+        # Ensure Access Client is running
+        
         logger.debug("[Participant] Đang kiểm tra cập nhật từ Server...")
         
         # 1. Đồng bộ (Sync Down)
@@ -111,6 +165,7 @@ class StateMachine:
         success = await asyncio.to_thread(self.context.session_manager.claim_session)
         
         if success:
+             self.context.start_heartbeat_monitor()
              return ClientState.HOSTING
         else:
              return ClientState.DISCOVERY
@@ -123,22 +178,36 @@ class StateMachine:
         if self.cached_manifest:
              self.cached_manifest = None
         
-        # 2. Heartbeat
-        await asyncio.sleep(self.context.session_manager.heartbeat_interval)
-        try:
-             updated_session = await asyncio.to_thread(self.context.session_manager.heartbeat_session)
+        # 2. Monitor Heartbeat & Services Health
+        await asyncio.sleep(2)
+        
+        # Check Heartbeat Task
+        if not self.context._heartbeat_task or self.context._heartbeat_task.done():
+             logger.warning("[Hosting] Heartbeat Task đã dừng!")
+             return ClientState.DISCOVERY
+        
+        # Check Cloudflare Tunnel (Host Mode)
+        if not self.context.cloudflare_service.is_host_running():
+             logger.error("[Hosting] Cloudflare Tunnel (Host) đã bị tắt bất thường!")
+             return ClientState.DISCOVERY
              
-             # Kiểm tra tính nhất quán
-             current_host_id = updated_session.get("host_id")
-             if current_host_id != self.context._settings.host_id:
-                  logger.warning("[Hosting] Phát hiện mất quyền Host trong lúc Heartbeat!")
-                  await self.context.stop_hosting_services()
-                  return ClientState.DISCOVERY
-                  
-        except Exception as e:
-             logger.error(f"[Hosting] Lỗi Heartbeat: {e}")
-             # Nếu lỗi Auth (401), coi như mất session
-             await self.context.stop_hosting_services()
+        # Check Game Server
+        if self.context.game_server and not self.context.game_server.is_running():
+             logger.error("[Hosting] Game Server đã bị tắt bất thường!")
+             
+             # Auto-Restart Logic
+             if self.context._last_start_command:
+                 logger.info("[Hosting] Đang thử khởi động lại Game Server...")
+                 # Start synchronously (fire and forget task) or await? 
+                 # start_server is async. We should await it.
+                 try:
+                     await self.context.game_server.start_server(self.context._last_start_command)
+                     # Wait a bit to prevent rapid loop if it crashes immediately
+                     await asyncio.sleep(5) 
+                     return ClientState.HOSTING
+                 except Exception as e:
+                     logger.error(f"[Hosting] Lỗi khi khởi động lại: {e}")
+             
              return ClientState.DISCOVERY
              
         return ClientState.HOSTING

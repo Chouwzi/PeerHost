@@ -3,10 +3,14 @@ import json
 import anyio
 import os
 
+import uuid
+
 async def write_json(path: Path, data: dict) -> None:
   path_obj = anyio.Path(path)
   await path_obj.parent.mkdir(parents=True, exist_ok=True)
-  tmp = path_obj.with_suffix(".tmp")
+  
+  # Use unique temp file to avoid race conditions (FileNotFoundError during high concurrency)
+  tmp = path_obj.parent / f"{path_obj.name}.{uuid.uuid4()}.tmp"
   
   async with await anyio.open_file(tmp, "w", encoding="utf-8") as f:
       await f.write(json.dumps(data, indent=2, ensure_ascii=False))

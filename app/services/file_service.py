@@ -14,6 +14,8 @@ RESTRICTED_PATTERNS = {
     "banned-ips.json",
     "eula.txt",
     "server.jar",
+    "cert.pem",
+    "config.yaml",
 }
 
 # Danh sách file nên bị bỏ qua (Garbage/Temp files/Executables)
@@ -28,24 +30,44 @@ IGNORED_PATTERNS = {
     "*~",
 }
 
-from app.core.config import SETTINGS_PATH
+# Danh sách file CHỈ-ĐỌC (Download-only, Client không bao giờ upload lên)
+# Infrastructure Isolation: Các file binary/config hệ thống mà Client cần tải về để chạy
+# nhưng không nên sync ngược lại Server để tránh Locked File và xung đột logic.
+READONLY_PATTERNS = {
+    "cloudflared-tunnel/*",
+    "libraries/*",
+    "logs/*",
+    "versions/*"
+}
+
+from app.core.config import SETTINGS_PATH, TUNNEL_NAME, GAME_HOSTNAME, GAME_LOCAL_PORT
 import json
 
 def get_sync_config() -> dict:
     """Trả về cấu hình Sync cho Client."""
     start_command = None
+    mirror_sync = False
+    java_version = "21"  # Default
     if SETTINGS_PATH.exists():
         try:
             with open(SETTINGS_PATH, "r") as f:
                 settings = json.load(f)
                 start_command = settings.get("start_command")
+                mirror_sync = settings.get("mirror_sync", False)
+                java_version = settings.get("java_version", "21")
         except:
             pass
 
     return {
         "restricted": list(RESTRICTED_PATTERNS),
         "ignored": list(IGNORED_PATTERNS),
-        "start_command": start_command
+        "readonly": list(READONLY_PATTERNS),
+        "start_command": start_command,
+        "mirror_sync": mirror_sync,
+        "tunnel_name": TUNNEL_NAME,
+        "game_hostname": GAME_HOSTNAME,
+        "game_local_port": GAME_LOCAL_PORT,
+        "java_version": java_version
     }
 
 from typing import AsyncGenerator
@@ -65,7 +87,8 @@ async def save_file(host_id: str, relative_path: str, content_stream: AsyncGener
         PermissionError: Nếu file nằm trong blacklist.
     """
     # 1. Security Check (Path Validation)
-    if relative_path in RESTRICTED_PATTERNS:
+    filename = Path(relative_path).name
+    if relative_path in RESTRICTED_PATTERNS or filename in RESTRICTED_PATTERNS:
         raise PermissionError(f"File '{relative_path}' is restricted and cannot be modified by client.")
     
     # Check ignored patterns
@@ -96,8 +119,9 @@ async def save_file(host_id: str, relative_path: str, content_stream: AsyncGener
     hasher = hashlib.sha256()
     
     # Ghi vào file tạm trước để tránh corrupt file thật nếu upload lỗi
-    # Note: Use string concat to APPEND .upload_tmp (with_suffix replaces entire suffix)
-    temp_path = anyio.Path(str(target_path) + ".upload_tmp")
+    # SECURITY: Use unique temp name to prevent concurrency issues
+    import uuid
+    temp_path = anyio.Path(f"{target_path}.{uuid.uuid4().hex[:8]}.tmp")
     
     try:
         async with await anyio.open_file(temp_path, "wb") as f:

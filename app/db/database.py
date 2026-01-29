@@ -1,4 +1,4 @@
-from sqlmodel import SQLModel, create_engine
+from sqlmodel import create_engine
 from app.core.config import DATABASE_URL
 
 engine = create_engine(

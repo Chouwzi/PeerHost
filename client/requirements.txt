@@ -1,5 +1,6 @@
-requests
+pydantic
+rich
+pyfiglet
 aiohttp
 watchfiles
-anyio
-tqdm
+psutil

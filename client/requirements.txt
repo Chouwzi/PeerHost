@@ -4,3 +4,4 @@ pyfiglet
 aiohttp
 watchfiles
 psutil
+requests

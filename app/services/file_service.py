@@ -43,7 +43,9 @@ READONLY_PATTERNS = {
 from app.core.config import SETTINGS_PATH, TUNNEL_NAME, GAME_HOSTNAME, GAME_LOCAL_PORT
 import json
 
-def get_sync_config() -> dict:
+from app.schemas.config import SyncConfig
+
+def get_sync_config() -> SyncConfig:
     """Trả về cấu hình Sync cho Client."""
     start_command = None
     mirror_sync = False
@@ -58,17 +60,17 @@ def get_sync_config() -> dict:
         except:
             pass
 
-    return {
-        "restricted": list(RESTRICTED_PATTERNS),
-        "ignored": list(IGNORED_PATTERNS),
-        "readonly": list(READONLY_PATTERNS),
-        "start_command": start_command,
-        "mirror_sync": mirror_sync,
-        "tunnel_name": TUNNEL_NAME,
-        "game_hostname": GAME_HOSTNAME,
-        "game_local_port": GAME_LOCAL_PORT,
-        "java_version": java_version
-    }
+    return SyncConfig(
+        restricted=list(RESTRICTED_PATTERNS),
+        ignored=list(IGNORED_PATTERNS),
+        readonly=list(READONLY_PATTERNS),
+        start_command=start_command,
+        mirror_sync=mirror_sync,
+        tunnel_name=TUNNEL_NAME,
+        game_hostname=GAME_HOSTNAME,
+        game_local_port=GAME_LOCAL_PORT,
+        java_version=java_version
+    )
 
 from typing import AsyncGenerator
 

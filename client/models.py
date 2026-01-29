@@ -16,4 +16,5 @@ class TunnelConfig(pydantic.BaseModel):
   tunnel_name: str = "PeerHost"
   game_hostname: str = ""
   game_local_port: int = 2812
+  java_version: str = "21"
 

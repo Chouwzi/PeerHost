@@ -201,7 +201,8 @@ class StateMachine:
                  # Start synchronously (fire and forget task) or await? 
                  # start_server is async. We should await it.
                  try:
-                     await self.context.game_server.start_server(self.context._last_start_command)
+                     port = self.context._tunnel_config.game_local_port if self.context._tunnel_config else 25565
+                     await self.context.game_server.start_server(self.context._last_start_command, port=port)
                      # Wait a bit to prevent rapid loop if it crashes immediately
                      await asyncio.sleep(5) 
                      return ClientState.HOSTING

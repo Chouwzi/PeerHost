@@ -74,11 +74,13 @@ class GameServerManager:
         """Kiểm tra Minecraft Server còn sống không"""
         return self.process is not None and self.process.returncode is None
 
-    async def start_server(self, start_command: str):
+    async def start_server(self, start_command: str, port: int = 25565):
         """Khởi động server với command được cung cấp."""
         if self.is_running():
             logger.warning("[GameServer] Server is already running!")
             return
+            
+        self.port = port # Store port for logging
 
         # Replace 'java' with portable Java path if available
         java_exe = get_java_executable()
@@ -93,8 +95,11 @@ class GameServerManager:
             cmd_args = [arg.strip('"') for arg in cmd_args]
         else:
             cmd_args = shlex.split(start_command)
+        
         cwd = self.watch_dir
         
+        logger.info(f"[GameServer] Command: {cmd_args[0]}")
+        logger.debug(f"[GameServer] Full command: {' '.join(cmd_args[:5])}...")
         
         try:
              # Create startup info to hide window (Windows only)
@@ -112,7 +117,7 @@ class GameServerManager:
                 stdin=asyncio.subprocess.PIPE,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0, # Extra safety
                 startupinfo=startupinfo
-            )
+             )
              
              # Register Process for Zombie Cleanup
              ProcessTracker().register("game_server", self.process.pid, "java.exe")
@@ -123,11 +128,12 @@ class GameServerManager:
              
         except Exception as e:
             logger.error(f"[GameServer] Failed to start server: {e}")
+            self.process = None
 
     async def stop_server(self):
-        """Dừng server an toàn (Graceful Shutdown)."""
-        if not self.process:
-            return
+        """Dừng server an toàn (gửi lệnh stop)."""
+        if not self.is_running():
+             return
 
         logger.warning("[GameServer] Đang dừng Server...")
         
@@ -145,8 +151,12 @@ class GameServerManager:
                 # Actually server prints "Saved" then exits.
                 
                 # Check server ready/save events if needed
-                should_wait_save = self.server_ready.is_set() # Only wait if it was fully up
+                should_wait_save = False
                 
+                # Check if we should wait for save (if running)
+                if self.is_running():
+                    should_wait_save = True
+                    
                 if should_wait_save:
                     try:
                         await asyncio.wait_for(self.world_saved.wait(), timeout=15.0)
@@ -237,7 +247,10 @@ class GameServerManager:
                              self.server_ready.set()
                              # Stop spinner when ready
                              status.stop() 
-                             logger.warning("[bold #ff0000][[/][bold #ff1000]G[/][bold #ff2100]a[/][bold #ff3100]m[/][bold #ff4200]e[/][bold #ff5300]S[/][bold #ff6300]e[/][bold #ff7400]r[/][bold #ff8500]v[/][bold #ff9400]e[/][bold #ffa200]r[/][bold #ffb100]][/] [bold #ffce00]S[/][bold #ffdd00]e[/][bold #ffeb00]r[/][bold #fffa00]v[/][bold #eaff00]e[/][bold #caff00]r[/] [bold #8cff00]M[/][bold #6dff00]i[/][bold #4eff00]n[/][bold #2eff00]e[/][bold #0fff00]c[/][bold #00ff0f]r[/][bold #00ff2e]a[/][bold #00ff4e]f[/][bold #00ff6d]t[/] [bold #00ffab]đ[/][bold #00ffca]ã[/] [bold #00faff]s[/][bold #00ebff]ẵ[/][bold #00dcff]n[/] [bold #00bfff]s[/][bold #00b1ff]à[/][bold #00a2ff]n[/][bold #0094ff]g[/] [bold #2474ff]k[/][bold #4363ff]ế[/][bold #6253ff]t[/] [bold #a131ff]n[/][bold #c021ff]ố[/][bold #df10ff]i[/][bold #ff00ff]![/]")
+                             logger.warning(f"[bold #ff0000][[/][bold #ff1000]G[/][bold #ff2100]a[/][bold #ff3100]m[/][bold #ff4200]e[/][bold #ff5300]S[/][bold #ff6300]e[/][bold #ff7400]r[/][bold #ff8500]v[/][bold #ff9400]e[/][bold #ffa200]r[/][bold #ffb100]][/] [bold #ffce00]S[/][bold #ffdd00]e[/][bold #ffeb00]r[/][bold #fffa00]v[/][bold #eaff00]e[/][bold #caff00]r[/] [bold #8cff00]M[/][bold #6dff00]i[/][bold #4eff00]n[/][bold #2eff00]e[/][bold #0fff00]c[/][bold #00ff0f]r[/][bold #00ff2e]a[/][bold #00ff4e]f[/][bold #00ff6d]t[/] [bold #00ffab]đ[/][bold #00ffca]ã[/] [bold #00faff]s[/][bold #00ebff]ẵ[/][bold #00dcff]n[/] [bold #00bfff]s[/][bold #00b1ff]à[/][bold #00a2ff]n[/][bold #0094ff]g[/] [bold #2474ff]k[/][bold #4363ff]ế[/][bold #6253ff]t[/] [bold #a131ff]n[/][bold #c021ff]ố[/][bold #df10ff]i[/][bold #ff00ff]![/]")
+                             # Log local address
+                             address = f"127.0.0.1:{getattr(self, 'port', 25565)}"
+                             logger.warning(f"[bold #ff0000][[/][bold #ff1000]G[/][bold #ff2100]a[/][bold #ff3100]m[/][bold #ff4200]e[/][bold #ff5300]S[/][bold #ff6300]e[/][bold #ff7400]r[/][bold #ff8500]v[/][bold #ff9400]e[/][bold #ffa200]r[/][bold #ffb100]][/] Server Address: [grey50]{address}[/grey50]")
                              
                          if "ThreadedAnvilChunkStorage: All dimensions are saved" in line_str:
                              self.world_saved.set()

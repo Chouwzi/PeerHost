@@ -141,24 +141,33 @@ java -jar server.jar nogui
 
 #### 4.1 Download Cloudflared
 
+**Windows:**
 Download `cloudflared.exe` from: https://github.com/cloudflare/cloudflared/releases
 
-Place it in both locations:
-- `app/storage/server_tunnel/cloudflared.exe`
-- `app/storage/world_data/cloudflared-tunnel/cloudflared.exe`
+**Linux:**
+```bash
+wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+chmod +x cloudflared-linux-amd64
+```
+
+Place it in:
+- **Server (Coordinator):** `app/storage/server_tunnel/cloudflared.exe` (Windows) or `cloudflared-linux-amd64` (Linux)
+- **Client (Game Tunnel):** `app/storage/world_data/cloudflared-tunnel/cloudflared.exe` (Windows only)
 
 #### 4.2 Login to Cloudflare (Get cert.pem)
 
+**Windows (PowerShell):**
 ```powershell
-# Navigate to server tunnel folder
 cd app/storage/server_tunnel
-
-# Login to Cloudflare (opens browser)
 .\cloudflared.exe tunnel login
-
-# After login, cert.pem is saved to C:\Users\<username>\.cloudflared\cert.pem
-# Copy it to current folder
 copy "$env:USERPROFILE\.cloudflared\cert.pem" .
+```
+
+**Linux (Bash):**
+```bash
+cd app/storage/server_tunnel
+./cloudflared-linux-amd64 tunnel login
+cp ~/.cloudflared/cert.pem .
 ```
 
 #### 4.3 Create API Tunnel (HTTP)
@@ -193,7 +202,8 @@ ingress:
 **Final folder structure:**
 ```
 app/storage/server_tunnel/
-├── cloudflared.exe
+├── cloudflared.exe           # Windows
+├── cloudflared-linux-amd64   # Linux
 ├── cert.pem
 ├── <API-TUNNEL-UUID>.json
 └── api_config.yaml
@@ -232,7 +242,7 @@ ingress:
 **Final folder structure:**
 ```
 app/storage/world_data/cloudflared-tunnel/
-├── cloudflared.exe
+├── cloudflared.exe    # Client-side (Windows only)
 ├── cert.pem
 ├── <GAME-TUNNEL-UUID>.json
 └── config.yaml
@@ -245,6 +255,40 @@ app/storage/world_data/cloudflared-tunnel/
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+### 6. Linux VPS Deployment (Production)
+
+For production deployment on a Linux VPS, use the automated setup script:
+
+```bash
+# Download and run setup script
+curl -O https://raw.githubusercontent.com/Chouwzi/PeerHost/main/services/setup_vps.sh
+sudo bash setup_vps.sh
+```
+
+**What the script does:**
+1. Installs Python 3 and dependencies
+2. Creates a dedicated `peerhost` service user
+3. Clones the repository to `/opt/peerhost`
+4. Sets up a Python virtual environment
+5. Configures systemd service with auto-restart
+
+**After setup, use these commands:**
+```bash
+# Check status
+sudo systemctl status peerhost
+
+# View logs (real-time)
+sudo journalctl -u peerhost -f
+
+# Restart after config changes
+sudo systemctl restart peerhost
+```
+
+> ⚠️ **Important**: Remember to `chmod +x` the cloudflared binary:
+> ```bash
+> chmod +x /opt/peerhost/app/storage/server_tunnel/cloudflared-linux-amd64
+> ```
 
 ---
 
@@ -320,7 +364,7 @@ PeerHost là hệ thống host Minecraft phân tán cho phép người chơi chi
 | RAM | 512 MB | 1 GB |
 | Ổ cứng | 5 GB | 10 GB |
 | Mạng | 100 Mbps | 1 Gbps |
-| OS | Windows 10/11 | Windows 10/11 |
+| OS | Windows/Linux | Linux (Ubuntu 22.04) |
 
 > 💡 **Lưu ý**: Server điều phối chỉ lưu trữ file world và quản lý session. Nó KHÔNG chạy Minecraft server, nên VPS giá rẻ ($3-5/tháng) là đủ.
 
@@ -392,24 +436,33 @@ java -jar server.jar nogui
 
 #### 4.1 Tải Cloudflared
 
+**Windows:**
 Tải `cloudflared.exe` từ: https://github.com/cloudflare/cloudflared/releases
 
-Đặt vào cả 2 vị trí:
-- `app/storage/server_tunnel/cloudflared.exe`
-- `app/storage/world_data/cloudflared-tunnel/cloudflared.exe`
+**Linux:**
+```bash
+wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+chmod +x cloudflared-linux-amd64
+```
+
+Đặt vào:
+- **Server (Điều phối):** `app/storage/server_tunnel/cloudflared.exe` (Windows) hoặc `cloudflared-linux-amd64` (Linux)
+- **Client (Game Tunnel):** `app/storage/world_data/cloudflared-tunnel/cloudflared.exe` (chỉ Windows)
 
 #### 4.2 Đăng nhập Cloudflare (Lấy cert.pem)
 
+**Windows (PowerShell):**
 ```powershell
-# Di chuyển đến thư mục server tunnel
 cd app/storage/server_tunnel
-
-# Đăng nhập Cloudflare (mở trình duyệt)
 .\cloudflared.exe tunnel login
-
-# Sau khi đăng nhập, cert.pem được lưu tại C:\Users\<username>\.cloudflared\cert.pem
-# Copy vào thư mục hiện tại
 copy "$env:USERPROFILE\.cloudflared\cert.pem" .
+```
+
+**Linux (Bash):**
+```bash
+cd app/storage/server_tunnel
+./cloudflared-linux-amd64 tunnel login
+cp ~/.cloudflared/cert.pem .
 ```
 
 #### 4.3 Tạo API Tunnel (HTTP)
@@ -444,7 +497,8 @@ ingress:
 **Cấu trúc thư mục cuối cùng:**
 ```
 app/storage/server_tunnel/
-├── cloudflared.exe
+├── cloudflared.exe           # Windows
+├── cloudflared-linux-amd64   # Linux
 ├── cert.pem
 ├── <API-TUNNEL-UUID>.json
 └── api_config.yaml
@@ -483,7 +537,7 @@ ingress:
 **Cấu trúc thư mục cuối cùng:**
 ```
 app/storage/world_data/cloudflared-tunnel/
-├── cloudflared.exe
+├── cloudflared.exe    # Client-side (chỉ Windows)
 ├── cert.pem
 ├── <GAME-TUNNEL-UUID>.json
 └── config.yaml
@@ -496,6 +550,40 @@ app/storage/world_data/cloudflared-tunnel/
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+### 6. Triển khai Linux VPS (Production)
+
+Để triển khai production trên Linux VPS, sử dụng script tự động:
+
+```bash
+# Tải và chạy script cài đặt
+curl -O https://raw.githubusercontent.com/Chouwzi/PeerHost/main/services/setup_vps.sh
+sudo bash setup_vps.sh
+```
+
+**Script sẽ tự động:**
+1. Cài đặt Python 3 và dependencies
+2. Tạo user service `peerhost` riêng
+3. Clone repository vào `/opt/peerhost`
+4. Thiết lập Python virtual environment
+5. Cấu hình systemd service với auto-restart
+
+**Sau khi cài đặt, sử dụng các lệnh:**
+```bash
+# Kiểm tra trạng thái
+sudo systemctl status peerhost
+
+# Xem logs (real-time)
+sudo journalctl -u peerhost -f
+
+# Restart sau khi thay đổi config
+sudo systemctl restart peerhost
+```
+
+> ⚠️ **Quan trọng**: Nhớ cấp quyền thực thi cho cloudflared:
+> ```bash
+> chmod +x /opt/peerhost/app/storage/server_tunnel/cloudflared-linux-amd64
+> ```
 
 ---
 

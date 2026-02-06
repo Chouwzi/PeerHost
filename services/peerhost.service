@@ -1,0 +1,28 @@
+[Unit]
+Description=PeerHost Coordinator Server
+Documentation=https://github.com/Chouwzi/PeerHost
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=peerhost
+Group=peerhost
+WorkingDirectory=/opt/peerhost
+ExecStart=/opt/peerhost/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment="PATH=/opt/peerhost/venv/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/peerhost/app/storage /opt/peerhost/cache
+
+[Install]
+WantedBy=multi-user.target

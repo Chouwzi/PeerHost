@@ -1,6 +1,7 @@
 
 import subprocess
 import os
+import signal
 from pathlib import Path
 import logging
 
@@ -12,18 +13,27 @@ class TunnelService:
     """
     Service responsible for managing the lifecycle of the API Cloudflare Tunnel.
     Follows Single Responsibility Principle: Only manages the tunnel process.
+    Supports both Windows and Linux platforms.
     """
     def __init__(self):
         self._process: subprocess.Popen | None = None
         # Definite path to the isolated server tunnel directory
         self._tunnel_dir = Path("app/storage/server_tunnel").resolve()
-        self._executable = self._tunnel_dir / "cloudflared.exe"
+        
+        # Cross-platform: Choose correct binary based on OS
+        if os.name == 'nt':
+            self._executable = self._tunnel_dir / "cloudflared.exe"
+        else:
+            self._executable = self._tunnel_dir / "cloudflared-linux-amd64"
+            
         self._config = self._tunnel_dir / "api_config.yaml"
         self._tunnel_name = "PeerHost-API"
 
     def start(self):
         """
-        Starts the Cloudflared tunnel in a separate visible window (Windows).
+        Starts the Cloudflared tunnel.
+        On Windows: Opens in a separate visible console window.
+        On Linux: Runs in background (logs go to stdout/stderr of parent).
         """
         if self._process:
             logger.warning("Tunnel is already running.")
@@ -43,17 +53,18 @@ class TunnelService:
         logger.info(f"Starting API Tunnel: {' '.join(cmd)}")
 
         try:
-            # CREATE_NEW_CONSOLE to open a visible window for the user to monitor status
-            creationflags = 0
-            if os.name == 'nt':
-                creationflags = subprocess.CREATE_NEW_CONSOLE
+            popen_kwargs = {
+                "cwd": str(self._tunnel_dir),
+            }
             
-            self._process = subprocess.Popen(
-                cmd,
-                cwd=str(self._tunnel_dir),
-                creationflags=creationflags
-                # We do not redirect stdout/stderr so they appear in the new console
-            )
+            if os.name == 'nt':
+                # Windows: Open in a separate visible console window
+                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+            else:
+                # Linux: Start new process group for clean termination
+                popen_kwargs["start_new_session"] = True
+            
+            self._process = subprocess.Popen(cmd, **popen_kwargs)
             logger.info(f"API Tunnel started with PID: {self._process.pid}")
             
         except Exception as e:
@@ -62,17 +73,23 @@ class TunnelService:
     def stop(self):
         """
         Stops the tunnel process gracefully.
+        Uses platform-appropriate termination methods.
         """
         if self._process:
             logger.info(f"Stopping API Tunnel (PID: {self._process.pid})...")
             try:
                 self._process.terminate()
-                # Wait a bit or logic to ensure it closes, but Popen.terminate is usually enough
-                # Since it's a separate console, it might close immediately.
                 self._process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                 if os.name == 'nt':
-                     subprocess.run(["taskkill", "/F", "/T", "/PID", str(self._process.pid)])
+                # Force kill if graceful termination times out
+                if os.name == 'nt':
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(self._process.pid)])
+                else:
+                    # Linux: Kill the entire process group
+                    try:
+                        os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass  # Already dead
             except Exception as e:
                 logger.error(f"Error stopping tunnel: {e}")
             finally:

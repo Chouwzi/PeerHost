@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, status, Depends, Request, Header
 from fastapi.responses import Response
 from app.services import file_service, host_service
 from app.dependencies import get_session_token
+from app.schemas.config import SyncConfig
 
 router = APIRouter()
 
@@ -62,12 +63,7 @@ async def download_file(
     # Trả về binary content
     return Response(content=content, media_type="application/octet-stream")
 
-@router.get("/world/config")
-async def get_sync_configuration():
-    """
-    API trả về cấu hình Sync cho Client.
-    Bao gồm:
-    - restricted: Danh sách file cấm (Client cần revert nếu sửa).
-    - ignored: Danh sách file rác (Client không nên upload).
-    """
+@router.get("/world/config", response_model=SyncConfig)
+async def get_sync_config():
+    """Lấy cấu hình đồng bộ cho Client"""
     return file_service.get_sync_config()

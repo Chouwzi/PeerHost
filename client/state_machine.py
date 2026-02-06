@@ -115,6 +115,10 @@ class StateMachine:
         
         if is_locked and current_host_id != self.context._settings.host_id:
             logger.info(f"[Discovery] Session đang được Host bởi: [bold yellow]{current_host_id}[/bold yellow]. Chuyển sang chế độ Khách (Participant).")
+            port = self.context._tunnel_config.game_local_port if self.context._tunnel_config else 25565
+            address = f"127.0.0.1:{port}"
+            logger.warning(f"[bold #ff0000][[/][bold #ff1000]G[/][bold #ff2100]a[/][bold #ff3100]m[/][bold #ff4200]e[/][bold #ff5300]S[/][bold #ff6300]e[/][bold #ff7400]r[/][bold #ff8500]v[/][bold #ff9400]e[/][bold #ffa200]r[/][bold #ffb100]][/] Server Address: [grey50]{address}[/grey50]")
+            
             # CloudflareService.start_participant_mode() is idempotent and doesn't stop host-mode
             await self.context.cloudflare_service.start_participant_mode()
             return ClientState.PARTICIPANT
@@ -201,7 +205,8 @@ class StateMachine:
                  # Start synchronously (fire and forget task) or await? 
                  # start_server is async. We should await it.
                  try:
-                     await self.context.game_server.start_server(self.context._last_start_command)
+                     port = self.context._tunnel_config.game_local_port if self.context._tunnel_config else 25565
+                     await self.context.game_server.start_server(self.context._last_start_command, port=port)
                      # Wait a bit to prevent rapid loop if it crashes immediately
                      await asyncio.sleep(5) 
                      return ClientState.HOSTING

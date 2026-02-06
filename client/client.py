@@ -222,7 +222,8 @@ class Client:
       if self.game_server:
           if start_command:
               logger.debug(f"[Client] Starting Game Server with command: {start_command}")
-              await self.game_server.start_server(start_command)
+              port = self._tunnel_config.game_local_port if self._tunnel_config else 25565
+              await self.game_server.start_server(start_command, port=port)
           else:
               logger.warning("[Client] Không có lệnh khởi động Game Server từ Sync config.")
       

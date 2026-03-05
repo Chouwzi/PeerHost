@@ -1,13 +1,18 @@
 {
-  "is_locked": false,
+  "is_locked": true,
   "host": {
-    "host_id": null,
-    "ip_address": null,
-    "token": null
+    "host_id": "duong0",
+    "ip_address": "2001:ee0:5533:bd80:21ae:f6d4:c26d:6037",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJob3N0X2lkIjoiZHVvbmcwIiwiaXBfYWRkcmVzcyI6IjIwMDE6ZWUwOjU1MzM6YmQ4MDoyMWFlOmY2ZDQ6YzI2ZDo2MDM3IiwiZXhwaXJlc19hdCI6IjIwMjYtMDItMTJUMDM6Mzk6NDkuOTgwOTEyKzAwOjAwIiwiZXhwIjoxNzcwOTUzOTY5fQ.8UPuucniwCLSR4tJLwgSc2wqo5EQnxZAZkkPo8S420o"
   },
   "timestamps": {
-    "started_at": null,
-    "last_heartbeat": null,
-    "expires_at": null
+    "started_at": "2026-02-12T03:39:29.980912+00:00",
+    "last_heartbeat": "2026-02-12T03:39:59.183500+00:00",
+    "expires_at": "2026-02-12T03:40:19.183500+00:00"
+  },
+  "status": {
+    "percent": 14.900000000000077,
+    "phase": "INIT",
+    "phase_name": "Khởi tạo"
   }
 }

@@ -6,3 +6,4 @@ class SessionCreate(BaseModel):
 class SessionResponse(BaseModel):
   is_locked: bool
   host_id: str | None
+  status: dict | None = None

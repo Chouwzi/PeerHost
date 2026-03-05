@@ -34,7 +34,6 @@ USER_SAFE_PATTERNS = {
     "launcher_profiles.json", "launcher_accounts.json",
     "session.lock",
     "libraries/*", "logs/*", "versions/*",
-    "*.old", "*.bak", "*.tmp", "*.lock"
 }
 
 class SessionLostError(Exception):

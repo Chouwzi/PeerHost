@@ -20,13 +20,13 @@ RESTRICTED_PATTERNS = {
 
 # Danh sách file nên bị bỏ qua (Garbage/Temp files/Executables)
 IGNORED_PATTERNS = {
-    "*.tmp",
+    # "*.tmp",
     "*.log",
-    "*.lock",
+    # "*.lock",
     "desktop.ini",
     ".DS_Store",
     "__pycache__/*",
-    "*.bak",
+    # "*.bak",
     "*~",
 }
 

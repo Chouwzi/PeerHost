@@ -1,5 +1,6 @@
 import sys
 import os
+import atexit
 import requests
 import zipfile
 import subprocess
@@ -7,6 +8,41 @@ import io
 import shutil
 from pathlib import Path
 from time import sleep
+
+# --- Single Instance Lock (inline, cannot import from client/common in PyInstaller) ---
+_LOCK_FILE = Path("client") / "cache" / "peerhost.lock"
+_lock_fd = None
+
+def _acquire_instance_lock() -> bool:
+    global _lock_fd
+    try:
+        _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _lock_fd = open(_LOCK_FILE, 'w')
+
+        if sys.platform == 'win32':
+            import msvcrt
+            msvcrt.locking(_lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        _lock_fd.write(str(os.getpid()))
+        _lock_fd.flush()
+        atexit.register(_release_instance_lock)
+        return True
+    except (IOError, OSError):
+        if _lock_fd:
+            try: _lock_fd.close()
+            except: pass
+            _lock_fd = None
+        return False
+
+def _release_instance_lock():
+    global _lock_fd
+    if _lock_fd:
+        try: _lock_fd.close()
+        except: pass
+        _lock_fd = None
 
 # Force UTF-8 Encoding for Windows Console
 if sys.platform == "win32":
@@ -92,6 +128,13 @@ def setup_runtime():
     return True
 
 def fetch_and_run_launcher():
+    # --- Single Instance Check ---
+    if not _acquire_instance_lock():
+        print("\n[PeerHost] Đã phát hiện một phiên PeerHost khác đang chạy!")
+        print("[PeerHost] Vui lòng đóng phiên cũ trước khi mở phiên mới.")
+        input("\nNhấn Enter để thoát...")
+        return
+
     try:
         # STEP 1: Ensure Runtime exists
         if not setup_runtime():
@@ -130,10 +173,14 @@ def fetch_and_run_launcher():
         
         # We need to make sure we run it from CWD so it finds 'client' folder
         cmd = [str(PYTHON_EXE), str(launcher_path)]
-        
+
+        # Signal to client.py that bootstrap holds the instance lock
+        env = os.environ.copy()
+        env["PEERHOST_INSTANCE_LOCKED"] = str(os.getpid())
+
         # Hide console window? No, users want logs.
         try:
-            subprocess.run(cmd)
+            subprocess.run(cmd, env=env)
         except KeyboardInterrupt:
             # User pressed Ctrl+C. The child process (launcher) should handle it.
             # We just exit gracefully.

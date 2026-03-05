@@ -62,13 +62,16 @@ class Client:
         watch_dir=watch_dir
     )
     
-    self.game_server = GameServerManager(watch_dir)
+    self.game_server = GameServerManager(watch_dir, self.session_manager)
     
     # Tunnel config (will be fetched from server on startup)
     self._tunnel_config: TunnelConfig | None = None
     self.cloudflare_service = CloudflareService(watch_dir, self._settings)
   
     self._heartbeat_task: asyncio.Task | None = None
+    self._shutdown_lock = asyncio.Lock()  # BUG #6 FIX: Ngăn concurrent shutdown
+    self._is_shutting_down = False
+    self._recovery_in_progress = False  # Flag: heartbeat recovery đang xử lý
     self.state_machine = StateMachine(self)
   
   async def start(self) -> None:
@@ -142,21 +145,25 @@ class Client:
             logger.debug("[Client] Đã dừng Heartbeat Monitor")
 
   async def _run_heartbeat_loop(self):
-        """Vòng lặp gửi heartbeat định kỳ với cơ chế Smart Retry"""
+        """Vòng lặp gửi heartbeat định kỳ với cơ chế Smart Retry.
+        BUG #2 FIX: Phân biệt 401 vs network failure, đảm bảo upload data trước khi tắt.
+        BUG #4 FIX: Sau reconnect, re-claim session và upload data.
+        """
         fail_count = 0
         MAX_RETRIES = 3
-        
+        MAX_RECONNECT_WAIT = 300  # BUG #10 FIX: 5 phút tối đa
+
         try:
             while True:
                 interval = self.session_manager.heartbeat_interval
                 await asyncio.sleep(interval)
-                
+
                 # Gửi heartbeat
                 updated, status_code = await asyncio.to_thread(self.session_manager.heartbeat_session)
-                
+
                 if status_code == 200:
-                    fail_count = 0 # Reset counter on success
-                    
+                    fail_count = 0  # Reset counter on success
+
                     # Check consistency logic
                     current_host_id = updated.get("host_id")
                     if current_host_id != self._settings.host_id:
@@ -165,42 +172,179 @@ class Client:
                         break
                     continue
 
-                # Handle Errors
+                # ── Handle 401 (Session lost/expired) ──
                 if status_code == 401:
-                    logger.error("[Heartbeat] Phiên làm việc đã bị hủy hoặc hết hạn (401). Đang dừng dịch vụ...")
-                    await self.stop_hosting_services(shutdown_cf_access=False, skip_session_stop=True, offline_mode=True)
+                    logger.error("[Heartbeat] Phiên làm việc đã bị hủy hoặc hết hạn (401). Khởi động khôi phục khẩn cấp.")
+                    # BUG #2 FIX: Dừng game server + upload data TRƯỚC khi tắt hẳn
+                    await self._emergency_save_and_shutdown()
                     break
-                
-                # Other Errors (502, 500, Timeout)
+
+                # ── Handle network/server errors (502, 500, Timeout) ──
                 fail_count += 1
-                logger.warning(f"[Heartbeat] Không thể duy trì phiên (Status: {status_code}). Lần {fail_count}/{MAX_RETRIES}")
-                
+                logger.warning(f"[Heartbeat] Lỗi heartbeat (HTTP {status_code}). Lần {fail_count}/{MAX_RETRIES}")
+
                 if fail_count >= MAX_RETRIES:
-                    # 1. Stop heavy services
-                    await self.stop_hosting_services(shutdown_cf_access=False, shutdown_cf_host=True, offline_mode=True)
-                    
-                    # 2. Enter Waiting Loop
-                    logger.warning("[Connection] Đang đợi kết nối từ Server...")
-                    while True:
-                            await asyncio.sleep(2) # Check every 2s
-                            try:
-                                status = await asyncio.to_thread(self.session_manager.check_connection)
-                                if status: break
-                            except Exception as e:
-                                logger.debug(f"[Connection] Check error: {e}")
+                    # BUG #4 FIX: Dừng game server (save world), chờ reconnect, rồi upload
+                    logger.warning(f"[Heartbeat] Không thể duy trì kết nối sau {MAX_RETRIES} lần thử. Khởi động khôi phục mạng.")
+                    await self._network_failure_recovery(MAX_RECONNECT_WAIT)
+                    break
+
+        except asyncio.CancelledError:
+            pass  # Normal cancellation from stop_heartbeat_monitor
         except Exception as e:
             logger.error(f"[Heartbeat] Lỗi ngoại lệ Heartbeat: {e}")
+
+  async def _emergency_save_and_shutdown(self):
+        """BUG #2 FIX: Khi nhận 401, dừng game server -> thử re-claim -> upload -> cleanup.
+        Đảm bảo data không bị mất dù session bị hủy bên server."""
+        self._recovery_in_progress = True  # Báo state machine không can thiệp
+        try:
+            logger.warning("[Recovery] Bắt đầu khôi phục khẩn cấp (401: Phiên hết hạn)")
+
+            # 1. Dừng tunnel + monitor ngay để ngăn traffic mới
+            if self.cloudflare_service:
+                logger.debug("[Recovery] Dừng Cloudflare Tunnel...")
+                await self.cloudflare_service.stop_host()
+            if self.sync_service:
+                logger.debug("[Recovery] Dừng file monitoring...")
+                self.sync_service.monitor.stop()
+                self.sync_service.diff_manager.cancel_all()
+
+            # 2. Dừng game server (Minecraft save world xuống disk)
+            if self.game_server:
+                logger.debug("[Recovery] Dừng Game Server...")
+                await self.game_server.stop_server()
+
+            # 3. Thử claim lại session để có token hợp lệ cho upload
+            logger.info("[Recovery] Đăng ký lại session para có token mới...")
+            reclaimed = await asyncio.to_thread(self.session_manager.claim_session)
+
+            if reclaimed and self.sync_service:
+                logger.info("[Recovery] Đã đăng ký lại session thành công. Bắt đầu upload dữ liệu...")
+                # Cập nhật token mới cho uploader
+                new_token = self.session_manager.load_token()
+                if new_token:
+                    self.sync_service.uploader.token = new_token
+                    self.sync_service.ensure_session_alive()  # BUG #7 FIX
+                try:
+                    await self.sync_service.final_sync()
+                    logger.info("[Recovery] Đã upload dữ liệu thành công sau khôi phục session.")
+                except Exception as e:
+                    logger.error(f"[Recovery] Lỗi khi upload dữ liệu: {e}")
+                # Giải phóng session sau khi upload xong
+                await asyncio.to_thread(self.session_manager.stop_session)
+            else:
+                logger.warning("[Recovery] Không thể đăng ký lại session. Dữ liệu giữ lại ở local.")
+
+            # 4. Cleanup
+            logger.debug("[Recovery] Dọn dẹp resources...")
+            self.stop_heartbeat_monitor()
+            if self.sync_service:
+                await self.sync_service.stop()
+                if self._sync_task:
+                    self._sync_task.cancel()
+                    try:
+                        await self._sync_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                self.sync_service = None
+                self._sync_task = None
+            logger.warning("[Recovery] Kết thúc khôi phục khẩn cấp")
+        finally:
+            self._recovery_in_progress = False
+
+  async def _network_failure_recovery(self, max_wait: int):
+        """BUG #4 FIX: Khi mất mạng (3 heartbeat fails), dừng game server,
+        chờ reconnect, rồi re-claim và upload data."""
+        self._recovery_in_progress = True  # Báo state machine không can thiệp
+        try:
+            logger.warning("[Recovery] Bắt đầu khôi phục mạng (Mất kết nối)")
+
+            # 1. Dừng tunnel
+            if self.cloudflare_service:
+                logger.debug("[Recovery] Dừng Cloudflare Tunnel...")
+                await self.cloudflare_service.stop_host()
+
+            # 2. Dừng file monitoring (ngăn upload spam khi mất mạng)
+            if self.sync_service:
+                logger.debug("[Recovery] Dừng file monitoring...")
+                self.sync_service.monitor.stop()
+                self.sync_service.diff_manager.cancel_all()
+
+            # 3. Dừng game server (save world xuống disk)
+            if self.game_server:
+                logger.debug("[Recovery] Dừng Game Server...")
+                await self.game_server.stop_server()
+
+            # 4. Chờ kết nối lại (có timeout)
+            logger.warning(f"[Connection] Chờ kết nối lại từ Server (tối đa {max_wait}s)...")
+            waited = 0
+            reconnected = False
+            reconnect_progress = 0
+            while waited < max_wait:
+                await asyncio.sleep(2)
+                waited += 2
+                reconnect_progress = int((waited / max_wait) * 100)
+                try:
+                    status = await asyncio.to_thread(self.session_manager.check_connection)
+                    if status:
+                        reconnected = True
+                        logger.info(f"[Connection] Kết nối lại thành công sau {waited}s!")
+                        break
+                except Exception as e:
+                    logger.debug(f"[Connection] Đang kiểm tra... ({waited}s/{max_wait}s)")
+
+            if not reconnected:
+                logger.error(f"[Connection] Timeout sau {max_wait}s. Dữ liệu giữ lại ở local.")
+            else:
+                # 5. Reconnected! Thử claim lại session và upload
+                logger.info("[Recovery] Đăng ký lại session sau reconnect...")
+                reclaimed = await asyncio.to_thread(self.session_manager.claim_session)
+
+                if reclaimed and self.sync_service:
+                    logger.info("[Recovery] Đã đăng ký lại session. Bắt đầu upload dữ liệu...")
+                    new_token = self.session_manager.load_token()
+                    if new_token:
+                        self.sync_service.uploader.token = new_token
+                        self.sync_service.ensure_session_alive()  # BUG #7 FIX
+                    try:
+                        await self.sync_service.final_sync()
+                        logger.info("[Recovery] Đã upload dữ liệu thành công sau reconnect.")
+                    except Exception as e:
+                        logger.error(f"[Recovery] Lỗi khi upload dữ liệu: {e}")
+                    # Giải phóng session
+                    await asyncio.to_thread(self.session_manager.stop_session)
+                else:
+                    logger.warning("[Recovery] Không thể đăng ký lại session. Dữ liệu giữ lại ở local.")
+
+            # 6. Cleanup
+            logger.debug("[Recovery] Dọn dẹp resources...")
+            self.stop_heartbeat_monitor()
+            if self.sync_service:
+                await self.sync_service.stop()
+                if self._sync_task:
+                    self._sync_task.cancel()
+                    try:
+                        await self._sync_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                self.sync_service = None
+                self._sync_task = None
+            logger.warning("[Recovery] Kết thúc khôi phục mạng")
+        finally:
+            self._recovery_in_progress = False
         
 
   async def start_hosting_services(self, known_server_files: dict = None):
       """Khởi động các dịch vụ Host: Sync -> Game -> Tunnel"""
       if self.sync_service:
-          return 
+          logger.debug("[Hosting] Hosting services đã active, bỏ qua khởi động lại.")
+          return
 
-      logger.debug("[Client] Đang khởi động Hosting Services...")
+      logger.info("[Hosting] Bắt đầu khởi động hosting services")
       token = self.session_manager.load_token()
       if not token:
-          logger.error("[Client] Không thể khởi động Services: Thiếu Token")
+          logger.error("[Hosting] Không thể khởi động services: Thiếu token hợp lệ")
           return
 
       watch_dir = self.pre_sync_manager.watch_dir
@@ -209,79 +353,94 @@ class Client:
           server_url=self._settings.server_url,
           token=token
       )
-      
+
       # 1. Initialize Sync (Fetch Config & Scan)
+      logger.debug("[Hosting] Khởi tạo Sync Service (Fetch config & Scan)...")
       start_command = await self.sync_service.initialize(known_server_files)
       self._last_start_command = start_command # Save for Auto-Restart logic
-      
+
       # 2. Start Sync Loop in Background
       self._sync_task = asyncio.create_task(self.sync_service.run_loop())
       logger.info(f"[Sync] Đã khởi động | Watch Dir: {watch_dir}")
-      
+
       # 3. Start Game Server
       if self.game_server:
           if start_command:
-              logger.debug(f"[Client] Starting Game Server with command: {start_command}")
+              logger.debug(f"[GameServer] Khởi động Server: {start_command}")
+
               port = self._tunnel_config.game_local_port if self._tunnel_config else 25565
               await self.game_server.start_server(start_command, port=port)
           else:
-              logger.warning("[Client] Không có lệnh khởi động Game Server từ Sync config.")
-      
+              logger.warning("[Hosting] Không có lệnh khởi động Game Server từ Sync config.")
+
       # 4. Start Cloudflare Tunnel (Host Mode)
       if self.cloudflare_service:
+          logger.info("[Cloudflare] Khởi động Cloudflare Tunnel (Host Mode)...")
           await self.cloudflare_service.start_host_mode()
+          logger.info("[Hosting] Tất cả hosting services đã khởi động thành công")
 
   async def stop_hosting_services(self, shutdown_cf_access: bool=True, shutdown_cf_host: bool=True, offline_mode: bool=False, skip_session_stop: bool=False):
-      """Dừng các dịch vụ Host theo trình tự chuẩn"""
-      logger.warning("[Client] Đang dừng Hosting Services...")
+      """Dừng các dịch vụ Host theo trình tự chuẩn.
+      BUG #6 FIX: Guard against concurrent calls."""
+      async with self._shutdown_lock:
+          if self._is_shutting_down:
+              logger.debug("[Client] stop_hosting_services already in progress, skipping.")
+              return
+          self._is_shutting_down = True
 
-      # 0. Nếu Offline Mode (Mất mạng), chặn ngay Sync để tránh Upload Spam khi tắt Server
-      if offline_mode and self.sync_service:
-           logger.info("[Client] Offline Mode: Hủy toàn bộ tác vụ Upload đang chờ.")
-           self.sync_service.monitor.stop() # Stop watching changes
-           self.sync_service.diff_manager.cancel_all() # Cancel pending uploads
+      try:
+          logger.warning("[Client] Đang dừng Hosting Services...")
 
-      # 1. Dừng Tunnel trước để ngắt các kết nối mới đang vào
-      if self.cloudflare_service:
-          if shutdown_cf_host:
-              await self.cloudflare_service.stop_host()
-          if shutdown_cf_access:
-              await self.cloudflare_service.stop_access()
-          
-      # 2. Dừng Game Server (Đợi lưu world xong)
-      if self.game_server:
-          await self.game_server.stop_server()
-      
-      # 3. Đợi các file đang upload dở hỏa tất
-      if self.sync_service and not offline_mode:
-          await self.sync_service.wait_for_pending_uploads(timeout=30.0)
-      
-      # 4. Đồng bộ cuối cùng (Final Sync) - Lúc này Heartbeat vẫn đang chạy nên Token còn sống
-      if self.sync_service and not offline_mode:
-          await self.sync_service.final_sync()
-            
-      # 5. Dừng Heartbeat Monitor TRƯỚC khi đóng Session để tránh gửi request 401
-      self.stop_heartbeat_monitor()
+          # 0. Nếu Offline Mode (Mất mạng), chặn ngay Sync để tránh Upload Spam khi tắt Server
+          if offline_mode and self.sync_service:
+               logger.info("[Client] Offline Mode: Hủy toàn bộ tác vụ Upload đang chờ.")
+               self.sync_service.monitor.stop()
+               self.sync_service.diff_manager.cancel_all()
 
-      # 6. Thông báo cho Server đóng Session (Giải phóng Lock ngay lập tức)
-      if not offline_mode and not skip_session_stop:
-        await asyncio.to_thread(self.session_manager.stop_session)
-        logger.info("[Session] Đã gửi thông báo đóng Session cho Server.")
-      
-      # 7. Cuối cùng mới dọn dẹp Sync Service Task
-      if self.sync_service:
-          logger.debug("[Sync] Cleaning up Sync Service...")
-          await self.sync_service.stop()
-          if self._sync_task:
-              self._sync_task.cancel()
-              try:
-                  await self._sync_task
-              except asyncio.CancelledError: # cancel
-                  pass
-              except Exception:
-                  pass
-          self.sync_service = None
-          self._sync_task = None
+          # 1. Dừng Tunnel trước để ngắt các kết nối mới đang vào
+          if self.cloudflare_service:
+              if shutdown_cf_host:
+                  await self.cloudflare_service.stop_host()
+              if shutdown_cf_access:
+                  await self.cloudflare_service.stop_access()
+
+          # 2. Dừng Game Server (Đợi lưu world xong)
+          if self.game_server:
+              await self.game_server.stop_server()
+
+          # 3. Đợi các file đang upload dở hoàn tất
+          if self.sync_service and not offline_mode:
+              await self.sync_service.wait_for_pending_uploads(timeout=30.0)
+
+          # 4. Đồng bộ cuối cùng (Final Sync) - Lúc này Heartbeat vẫn đang chạy nên Token còn sống
+          if self.sync_service and not offline_mode:
+              self.sync_service.ensure_session_alive()  # BUG #7 FIX
+              await self.sync_service.final_sync()
+
+          # 5. Dừng Heartbeat Monitor TRƯỚC khi đóng Session để tránh gửi request 401
+          self.stop_heartbeat_monitor()
+
+          # 6. Thông báo cho Server đóng Session (Giải phóng Lock ngay lập tức)
+          if not offline_mode and not skip_session_stop:
+            await asyncio.to_thread(self.session_manager.stop_session)
+            logger.info("[Session] Đã gửi thông báo đóng Session cho Server.")
+
+          # 7. Cuối cùng mới dọn dẹp Sync Service Task
+          if self.sync_service:
+              logger.debug("[Sync] Cleaning up Sync Service...")
+              await self.sync_service.stop()
+              if self._sync_task:
+                  self._sync_task.cancel()
+                  try:
+                      await self._sync_task
+                  except asyncio.CancelledError:
+                      pass
+                  except Exception:
+                      pass
+              self.sync_service = None
+              self._sync_task = None
+      finally:
+          self._is_shutting_down = False
           
   async def stop(self):
     """Dừng toàn bộ Client và Cleanup"""
@@ -296,6 +455,7 @@ class Client:
 if __name__ == "__main__":
   # Fix for Windows Asyncio Subprocess & Console Close Handler
   import os
+  import sys
   import ctypes
   
   if os.name == 'nt':
@@ -333,6 +493,24 @@ if __name__ == "__main__":
        # Create and register handler
        ctrl_handler = HandlerRoutine(win32_ctrl_handler)
        kernel32.SetConsoleCtrlHandler(ctrl_handler, True)
+
+  # --- Single Instance Enforcement ---
+  _instance_lock = None
+  if not os.environ.get("PEERHOST_INSTANCE_LOCKED"):
+      from common.instance_lock import InstanceLock
+      _instance_lock = InstanceLock()
+      if not _instance_lock.acquire():
+          from rich.console import Console
+          from rich.panel import Panel
+          _c = Console()
+          _c.print(Panel(
+              "[bold red]Phát hiện một phiên PeerHost khác đang chạy![/bold red]\n"
+              "[white]Vui lòng đóng phiên cũ trước khi mở phiên mới.[/white]",
+              title="[bold yellow]Cảnh báo[/bold yellow]",
+              border_style="red"
+          ))
+          input("Nhấn Enter để thoát...")
+          sys.exit(1)
 
   client = Client()
   

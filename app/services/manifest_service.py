@@ -3,10 +3,13 @@ Manifest Service - Scan world files and generate manifest
 """
 
 import hashlib
+import fnmatch
 from pathlib import Path
 from typing import List, Dict, Tuple
 import anyio
 from app.core.config import STORAGE_PATH, WORLD_DATA_PATH
+from app.services.file_service import IGNORED_PATTERNS
+
 
 # --- STAT CACHE IMPLEMENTATION ---
 class StatCache:
@@ -92,14 +95,21 @@ async def scan_world_files() -> List[Dict]:
         # Skip meta folder (session.json, etc.)
         if "meta" in sync_path.parts:
             continue
-            
-        # Skip lock files and temp files
-        if sync_path.name.endswith((".lock", ".tmp", ".log")):
-            continue
         
         try:
             # Get relative path from root folder
             relative_path = sync_path.relative_to(WORLD_DATA_PATH).as_posix()
+            filename = sync_path.name
+            
+            # Skip files matching IGNORED_PATTERNS
+            is_ignored = False
+            for pattern in IGNORED_PATTERNS:
+                if fnmatch.fnmatch(relative_path, pattern) or fnmatch.fnmatch(filename, pattern):
+                    is_ignored = True
+                    break
+            
+            if is_ignored:
+                continue
             
             # Get stat info (Sync stat is fast on SSDs, but strictly should be async if paranoid)
             # We'll stick to os.stat for speed in this loop, or use the path obj.

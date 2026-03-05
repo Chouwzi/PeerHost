@@ -33,7 +33,8 @@ USER_SAFE_PATTERNS = {
     "TLauncher*", "skin_*", ".auth/*",
     "launcher_profiles.json", "launcher_accounts.json",
     "session.lock",
-    "libraries/*", "logs/*", "versions/*"
+    "libraries/*", "logs/*", "versions/*",
+    "*.old", "*.bak", "*.tmp", "*.lock"
 }
 
 class SessionLostError(Exception):
@@ -92,6 +93,31 @@ async def fetch_server_config(server_url: str, timeout: int = 10) -> dict | None
              
     return None
 
+# Global Hash Cache to prevent redundant calculations during session transitions
+_global_hash_cache = {} # path -> (hash, mtime, size)
+
+def get_cached_hash(file_path: Path) -> str | None:
+    try:
+        stat = file_path.stat()
+        mtime = stat.st_mtime
+        size = stat.st_size
+        
+        cached = _global_hash_cache.get(file_path)
+        if cached:
+            c_hash, c_mtime, c_size = cached
+            if c_mtime == mtime and c_size == size:
+                return c_hash
+    except:
+        pass
+    return None
+
+def update_hash_cache(file_path: Path, file_hash: str):
+    try:
+        stat = file_path.stat()
+        _global_hash_cache[file_path] = (file_hash, stat.st_mtime, stat.st_size)
+    except:
+        pass
+
 class PreSyncManager:
     """
     Quản lý việc tải file từ Server về Client TRƯỚC khi làm Host.
@@ -103,18 +129,26 @@ class PreSyncManager:
         self.watch_dir = watch_dir
         self.token = token
         self._is_synced = False
+        self._last_manifest_data = None
         
     def set_token(self, token: str):
         """Set token sau khi client nhận được từ server"""
         self.token = token
         
     def _calculate_local_hash(self, file_path: Path) -> str:
-        """Tính SHA256 của file local"""
+        """Tính SHA256 của file local (có Use Cache)"""
+        cached = get_cached_hash(file_path)
+        if cached:
+            return cached
+            
         sha256_hash = hashlib.sha256()
         with open(file_path, "rb") as f:
             for chunk in iter(lambda: f.read(8192), b""):
                 sha256_hash.update(chunk)
-        return sha256_hash.hexdigest()
+        
+        res = sha256_hash.hexdigest()
+        update_hash_cache(file_path, res)
+        return res
     
     async def get_manifest(self) -> dict | None:
         """Wrapper cho fetch_server_manifest"""
@@ -194,10 +228,10 @@ class PreSyncManager:
              # 3. Delete
              try:
                  file_path.unlink()
-                 logger.info(f"[Prune] Đã xóa file thừa: {rel_path}")
+                 logger.debug(f"[Prune] Đã xóa file thừa: {rel_path}")
                  removed_count += 1
              except Exception as e:
-                 logger.warning(f"[Prune] Không thể xóa {rel_path}: {e}")
+                 logger.debug(f"[Prune] Không thể xóa {rel_path}: {e}")
                  
         if removed_count > 0:
             logger.info(f"[Prune] Đã dọn dẹp {removed_count} file thừa.")
@@ -216,46 +250,62 @@ class PreSyncManager:
         if not manifest:
             logger.error("[PreSync] Failed to fetch manifest from server")
             return False, 0, 0, None
-        
-        server_files = manifest.get("files", [])
-        logger.debug(f"[PreSync] Server đang có {len(server_files)} file")
-        
-        # 2. Lấy config từ server (Check Mirror Mode)
-        server_config = await fetch_server_config(self.server_url)
-        mirror_sync = server_config.get("mirror_sync", False) if server_config else False
-        
-        if mirror_sync:
-            logger.debug("[PreSync] Mirror Mode đang bật. Đang quét file thừa để xóa...")
-            await self._prune_extra_files(server_files)
+            
+        # Optimization: Skip if manifest hasn't changed
+        if manifest == self._last_manifest_data and self._is_synced:
+             logger.debug("[PreSync] Manifest unchanged. Skipping full scan.")
+             server_files_dict = {f["path"]: f["hash"] for f in manifest.get("files", [])}
+             return True, 0, 0, server_files_dict
 
-        # 3. So sánh với local
-        files_to_download = []
+        self._last_manifest_data = manifest
         
-        # Dùng tqdm cho bước so sánh nếu cần, nhưng thường rất nhanh
-        for file_info in server_files:
-            relative_path = file_info["path"]
-            server_hash = file_info["hash"]
-            file_size = file_info.get("size", 0)
+        with console.status("[bold #12c2e9]Đ[/][bold #17bfe9]a[/][bold #1cbde9]n[/][bold #21bae9]g[/] [bold #2cb6e9]k[/][bold #31b3e9]i[/][bold #36b1e9]ể[/][bold #3baee9]m[/] [bold #46aaea]t[/][bold #4ba7ea]r[/][bold #50a5ea]a[/] [bold #5ba0ea]s[/][bold #609eea]ự[/] [bold #6b99eb]k[/][bold #7097eb]h[/][bold #7594eb]á[/][bold #7a92eb]c[/] [bold #858deb]b[/][bold #8a8beb]i[/][bold #8f88eb]ệ[/][bold #9486eb]t[/] [bold #9f81ec]v[/][bold #a47fec]ớ[/][bold #af7aec]i[/] [bold #b976ec]S[/][bold #be73ec]e[/][bold #c471ed]r[/][bold #c96ddb]v[/][bold #ce6ace]e[/][bold #d466bd]r[/][bold #d863b0].[/][bold #de5f9e].[/][bold #e25c91].[/]", spinner="dots") as status:
             
-            local_path = self.watch_dir / relative_path
+            server_files = manifest.get("files", [])
+            logger.debug(f"[PreSync] Server đang có {len(server_files)} file")
             
-            if not local_path.exists():
-                # File không tồn tại ở local
-                # Note: Append full info dict, not just path
-                files_to_download.append(file_info)
-                logger.debug(f"[PreSync] Thiếu file: {relative_path} ({file_size} B)")
-            else:
-                # File tồn tại, kiểm tra hash
-                local_hash = self._calculate_local_hash(local_path)
-                if local_hash != server_hash:
+            # 2. Lấy config từ server (Check Mirror Mode)
+            server_config = await fetch_server_config(self.server_url)
+            mirror_sync = server_config.get("mirror_sync", False) if server_config else False
+            
+            if mirror_sync:
+                logger.debug("[PreSync] Mirror Mode đang bật. Đang quét file thừa để xóa...")
+                await self._prune_extra_files(server_files)
+
+            # 3. So sánh với local
+            files_to_download = []
+            
+            total_server_files = len(server_files)
+            # Dùng tqdm cho bước so sánh nếu cần, nhưng thường rất nhanh
+            for i, file_info in enumerate(server_files):
+                relative_path = file_info["path"]
+                server_hash = file_info["hash"]
+                file_size = file_info.get("size", 0)
+                
+                # Update status with percentage
+                percent = (i + 1) / total_server_files * 100 if total_server_files > 0 else 100
+                if (i + 1) % 10 == 0 or (i + 1) == total_server_files:
+                    status.update(f"[bold #12c2e9]Đ[/][bold #17bfe9]a[/][bold #1cbde9]n[/][bold #21bae9]g[/] [bold #2cb6e9]k[/][bold #31b3e9]i[/][bold #36b1e9]ể[/][bold #3baee9]m[/] [bold #46aaea]t[/][bold #4ba7ea]r[/][bold #50a5ea]a[/] [bold #5ba0ea]s[/][bold #609eea]ự[/] [bold #6b99eb]k[/][bold #7097eb]h[/][bold #7594eb]á[/][bold #7a92eb]c[/] [bold #858deb]b[/][bold #8a8beb]i[/][bold #8f88eb]ệ[/][bold #9486eb]t[/] [bold #9f81ec]v[/][bold #a47fec]ớ[/][bold #af7aec]i[/] [bold #b976ec]S[/][bold #be73ec]e[/][bold #c471ed]r[/][bold #c96ddb]v[/][bold #ce6ace]e[/][bold #d466bd]r[/] [bold #d863b0]({percent:.0f}%) [/]")
+                
+                local_path = self.watch_dir / relative_path
+                
+                if not local_path.exists():
+                    # File không tồn tại ở local
+                    # Note: Append full info dict, not just path
                     files_to_download.append(file_info)
-                    logger.debug(f"[PreSync] Khác nội dung: {relative_path}")
-        
-        if not files_to_download:
-            logger.debug("[PreSync] Tất cả file đã được đồng bộ.")
-            # Ensure we return a flat dict for consistency with the download case
-            server_files_dict = {f["path"]: f["hash"] for f in manifest.get("files", [])}
-            return True, 0, 0, server_files_dict
+                    logger.debug(f"[PreSync] Thiếu file: {relative_path} ({file_size} B)")
+                else:
+                    # File tồn tại, kiểm tra hash
+                    local_hash = self._calculate_local_hash(local_path)
+                    if local_hash != server_hash:
+                        files_to_download.append(file_info)
+                        logger.debug(f"[PreSync] Khác nội dung: {relative_path}")
+            
+            if not files_to_download:
+                logger.debug("[PreSync] Tất cả file đã được đồng bộ.")
+                # Ensure we return a flat dict for consistency with the download case
+                server_files_dict = {f["path"]: f["hash"] for f in manifest.get("files", [])}
+                return True, 0, 0, server_files_dict
         
         # 4. Tải file (Concurrent)
         total_bytes = sum(f.get("size", 0) for f in files_to_download)
@@ -314,6 +364,7 @@ class PreSyncManager:
         else:
              logger.info(f"[italic grey58][PreSync] Đồng bộ thành công:[/] [bold grey68]{downloaded_count} file[/] [italic grey58]| Tổng:[/] [bold grey68]{size_str}[/].")
 
+        self._is_synced = is_success
         return is_success, downloaded_count, len(files_to_download), server_files_dict
 
     async def sync_priority(self, patterns: list[str]) -> bool:
@@ -479,7 +530,7 @@ class Uploader:
                 
                 try:
                     file_hash = await asyncio.to_thread(self._calculate_sha256, file_path) # Offload CPU
-                    
+
                     if known_hash:
                         if file_hash == known_hash:
                             logger.debug(f"[Upload] Bỏ qua (Matched): {relative_path}")
@@ -488,13 +539,19 @@ class Uploader:
                             logger.debug(f"[Upload] Mismatch {relative_path}: Local({file_hash[:8]}) != Server({known_hash[:8]})")
                     else:
                          logger.debug(f"[Upload] New File: {relative_path}")
-                    
+
                     headers["X-File-Hash"] = file_hash
-                    
+
                     # 2. Retry Loop
                     MAX_RETRIES = 3
                     for attempt in range(MAX_RETRIES):
                         try:
+                            # BUG #8 FIX: Re-hash file trước mỗi retry vì file có thể thay đổi
+                            # (game server đang ghi) giữa các lần thử
+                            if attempt > 0:
+                                file_hash = await asyncio.to_thread(self._calculate_sha256, file_path)
+                                headers["X-File-Hash"] = file_hash
+
                             # Re-open file for each attempt
                             with open(file_path, 'rb') as f:
                                 # Uploads can take long, disable total timeout, rely on socket read/write
@@ -550,12 +607,19 @@ class Uploader:
                 self.processing_context.remove(file_path)
 
     def _calculate_sha256(self, file_path: Path) -> str:
-        """Tính SHA256 của file."""
+        """Tính SHA256 của file (có Use Cache)."""
+        cached = get_cached_hash(file_path)
+        if cached:
+            return cached
+            
         sha256_hash = hashlib.sha256()
         with open(file_path, "rb") as f:
             for byte_block in iter(lambda: f.read(4096), b""):
                 sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
+        
+        res = sha256_hash.hexdigest()
+        update_hash_cache(file_path, res)
+        return res
 
     async def revert_file(self, file_path: Path):
         """
@@ -747,6 +811,13 @@ class SyncService:
         self.uploader = Uploader(server_url, token, self.processing_context, watch_dir, None, max_concurrency=5)
         self.diff_manager = DiffManager(self.uploader, watch_dir, self.processing_context)
         self.monitor = FileMonitor(watch_dir, self.diff_manager)
+
+    def ensure_session_alive(self):
+        """BUG #7 FIX: Đảm bảo aiohttp session còn sống cho upload.
+        Gọi trước final_sync hoặc khi token thay đổi."""
+        if not self._session or self._session.closed:
+            self._session = aiohttp.ClientSession()
+            self.uploader.session = self._session
     
     async def fetch_config(self) -> str | None:
         """Lấy cấu hình Sync từ Server. Trả về start_command nếu có."""
@@ -790,12 +861,26 @@ class SyncService:
         logger.debug(f"[InitialSync] Đang quét thư mục: {self.watch_dir}")
         file_count = 0
         
-        for file_path in self.watch_dir.rglob("*"):
-            if file_path.is_file():
+        # Change message if it's a verification scan (known_server_files exists)
+        msg = "[bold #fbda61]Đ[/][bold #fbd35d]a[/][bold #fbcc59]n[/][bold #fbc555]g[/] [bold #fbb44d]q[/][bold #fbad49]u[/][bold #fba645]é[/][bold #fb9f41]t[/] [bold #fb8d39]v[/][bold #fb8635]à[/] [bold #fb772d]đ[/][bold #fb7029]ồ[/][bold #fb6925]n[/][bold #fb6221]g[/] [bold #fb5419]b[/][bold #fb4d15]ộ[/] [bold #fb3f0d]d[/][bold #fb3809]ữ[/] [bold #fb3105]l[/][bold #fb2a01]i[/][bold #f52902]ệ[/][bold #ef2803]u[/] [bold #e32605]b[/][bold #dd2506]a[/][bold #d72407]n[/] [bold #cb2209]đ[/][bold #c5210a]ầ[/][bold #bf200b]u[/][bold #b91f0c].[/][bold #b31e0d].[/][bold #ad1d0e].[/]"
+        if known_server_files:
+             msg = "[bold #fbda61]Đ[/][bold #fbd35d]a[/][bold #fbcc59]n[/][bold #fbc555]g[/] [bold #fbb44d]đ[/][bold #fbad49]ố[/][bold #fba645]i[/] [bold #fb9f41]s[/][bold #fb8d39]o[/][bold #fb8635]á[/][bold #fb772d]t[/] [bold #fb7029]d[/][bold #fb6925]ữ[/] [bold #fb6221]l[/][bold #fb5419]i[/][bold #fb4d15]ệ[/][bold #fb3f0d]u[/] [bold #fb3809]v[/][bold #fb3105]à[/] [bold #fb2a01]c[/][bold #f52902]h[/][bold #ef2803]u[/][bold #e32605]ẩ[/][bold #dd2506]n[/] [bold #d72407]b[/][bold #cb2209]ị[/] [bold #c5210a]H[/][bold #bf200b]o[/][bold #b91f0c]s[/][bold #b31e0d]t[/][bold #ad1d0e]i[/][bold #a71c0f]n[/][bold #a11b10]g[/][bold #9b1a11].[/][bold #951912].[/][bold #8f1813].[/]"
+             
+        with console.status(msg, spinner="dots") as status:
+            # Lấy danh sách file trước để có tổng số lượng (Hỗ trợ hiển thị %)
+            all_files_to_scan = [f for f in self.watch_dir.rglob("*") if f.is_file()]
+            total_scan = len(all_files_to_scan)
+            
+            for i, file_path in enumerate(all_files_to_scan):
                 try:
                     rel_path = file_path.relative_to(self.watch_dir).as_posix()
                 except ValueError:
                     rel_path = file_path.name
+
+                # Update status message with percentage
+                percent = (i + 1) / total_scan * 100 if total_scan > 0 else 100
+                if (i + 1) % 5 == 0 or (i + 1) == total_scan: # Update mỗi 5 file để mượt và ít tốn resources
+                    status.update(f"[bold #fbda61]Đ[/][bold #fbd35d]a[/][bold #fbcc59]n[/][bold #fbc555]g[/] [bold #fbb44d]q[/][bold #fbad49]u[/][bold #fba645]é[/][bold #fb9f41]t[/] [bold #fb8d39]v[/][bold #fb8635]à[/] [bold #fb772d]đ[/][bold #fb7029]ồ[/][bold #fb6925]n[/][bold #fb6221]g[/] [bold #fb5419]b[/][bold #fb4d15]ộ[/] [bold #fb3f0d]d[/][bold #fb3809]ữ[/] [bold #fb3105]l[/][bold #fb2a01]i[/][bold #f52902]ệ[/][bold #ef2803]u[/] [bold #e32605]b[/][bold #dd2506]a[/][bold #d72407]n[/] [bold #cb2209]đ[/][bold #c5210a]ầ[/][bold #bf200b]u[/] [bold #b31e0d]({percent:.0f}%) [/]")
 
                 # Filter Ignore (Client-checked based on server config)
                 if self.diff_manager._is_ignored(rel_path):
@@ -808,16 +893,7 @@ class SyncService:
                 if file_path.name in self.diff_manager.restricted_patterns:
                     continue
 
-                try:
-                    rel_path = file_path.relative_to(self.watch_dir).as_posix()
-                except ValueError:
-                    rel_path = file_path.name
-
                 known_hash = known_server_files.get(rel_path) if known_server_files else None
-                
-                # [DEBUG] Trace Hash Matching
-                # logger.debug(f"[Trace] File: {rel_path} | Known Hash (Prefix): {known_hash[:8] if known_hash else 'None'}")
-                
                 await self.uploader.upload_file(file_path, known_hash)
                 file_count += 1
         
@@ -872,7 +948,10 @@ class SyncService:
         Chỉ upload những file có hash khác với server.
         """
         logger.info("[FinalSync] Đang đồng bộ dữ liệu cuối cùng trước khi tắt...")
-        
+
+        # BUG #7 FIX: Đảm bảo aiohttp session còn sống
+        self.ensure_session_alive()
+
         # 1. Fetch current server manifest for hash comparison
         manifest = await fetch_server_manifest(self.server_url)
         known_hashes = {}

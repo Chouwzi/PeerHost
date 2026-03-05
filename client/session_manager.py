@@ -138,20 +138,38 @@ class SessionManager:
       logger.error(f"[Session] Lỗi lấy thông tin session: {e}")
       return None
 
+  # Sync Status (Detailed status for participants)
+  def sync_status(self, status_data: dict) -> bool:
+    """Gửi các thông tin chi tiết về trạng thái (Ví dụ: Startup %)"""
+    try:
+      headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.load_token()}"}
+      resp = req.post(
+        self._settings.server_url + "/world/session/status",
+        json=status_data,
+        headers=headers,
+        timeout=5
+      )
+      return resp.status_code == 200
+    except Exception as e:
+      logger.debug(f"[Session] Failed to sync status: {e}")
+      return False
+
   # Check Connection (Lightweight)
   def check_connection(self) -> bool:
       """Kiểm tra kết nối tới Server (Pinging)"""
       try:
           headers = {"Content-Type": "application/json"}
           resp = req.get(self._settings.server_url + "/world/session", headers=headers, timeout=5)
-          
-          if resp.status_code == 200:
-               # Verify it's actually JSON (not Cloudflare HTML 200 Page)
+
+          # BUG #12 FIX: Chấp nhận cả 200 và 404 là "server alive"
+          # 404 xảy ra khi session chưa tồn tại - server vẫn hoạt động bình thường
+          if resp.status_code in [200, 404]:
                try:
                    resp.json()
                    return True
                except ValueError:
-                   return False
+                   # 404 JSON response từ FastAPI vẫn là server sống
+                   return resp.status_code == 404
           return False
       except Exception:
           return False

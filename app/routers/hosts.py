@@ -25,20 +25,36 @@ async def claim_session(payload: SessionCreate, request: Request):
 
 @router.post("/session/heartbeat", status_code=status.HTTP_200_OK)
 async def heartbeat(token: dict = Depends(get_session_token)):
-    """Gửi heartbeat để duy trì session"""
-    # Xác thực quyền sở hữu token
-    if not await host_service.auth_claim_session(token.get("host_id"), token.get("ip_address")):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized or Session lost")
-    
+    """Gửi heartbeat để duy trì session (BUG #3 FIX: atomic auth + renew)"""
+    # Sử dụng auth_and_heartbeat atomic thay vì auth rồi mới heartbeat riêng.
+    # Tránh race condition: auth auto-reset expired session trước khi heartbeat kịp renew.
     try:
-        heartbeat = await host_service.heartbeat_session()
+        success, updated = await host_service.auth_and_heartbeat(
+            token.get("host_id"), token.get("ip_address")
+        )
     except FileNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
+    if not success:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized or Session lost")
+
     return {
       "host_id": token.get("host_id"),
-      "timestamps": heartbeat.get("timestamps")
+      "timestamps": updated.get("timestamps") if updated else None
     }
+
+@router.post("/session/status", status_code=status.HTTP_200_OK)
+async def update_status(payload: dict, token: dict = Depends(get_session_token)):
+    """Cập nhật trạng thái chi tiết (VD: Progress khởi động)"""
+    if not await host_service.auth_claim_session(token.get("host_id"), token.get("ip_address")):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    
+    try:
+        await host_service.sync_status(payload)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    
+    return {"status": "ok"}
   
 @router.get("/session", status_code=status.HTTP_200_OK, response_model=SessionResponse)
 async def get_session():
@@ -49,7 +65,8 @@ async def get_session():
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
   return SessionResponse(
     is_locked=session["is_locked"],
-    host_id=session["host"]["host_id"]
+    host_id=session["host"]["host_id"],
+    status=session.get("status")
   )
 
 @router.delete("/session", status_code=status.HTTP_204_NO_CONTENT)
